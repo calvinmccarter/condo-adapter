@@ -5,12 +5,24 @@ import pandas as pd
 import torchmin as tm
 import sklearn.utils as skut
 
-from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.cluster import KMeans
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import (
+    ConstantKernel,
+    RBF,
+    WhiteKernel,
+)
+
+from condo.heteroscedastic_kernel import HeteroscedasticKernel
+from condo.cat_kernels import (
+    CatKernel,
+    HeteroscedasticCatKernel,
+)
 
 def independent_conditional_distr(
-    S,
-    X_S,
+    Y,
+    X,
+    Ytest,
     multi_confounder,
     kld_direction,
     heteroscedastic,
@@ -27,36 +39,66 @@ def independent_conditional_distr(
         est_sigmas:
             same size as S
     """
-    num_feats = S.shape[1]
-    num_confounders = X_S.shape[1]
+    num_test = Ytest.shape[0]
+    num_feats = Y.shape[1]
+    num_confounders = X.shape[1]
     if num_confounders > 1:
         raise NotImplementedError(f"num_confounders {num_confounders}")
     confounder_is_cat = (
-        np.issubdtype(X_S.dtype, np.number) and not (X_S.type == bool)
+        np.issubdtype(X.dtype, np.number) and not (X.type == bool)
     )
+    if confounder_is_cat and not heteroscedastic:
+        print("warning: homoscedastic with categorical not recommended")
 
-    est_mus = np.zeros_like(S)
-    est_sigmas = np.zeros_like(X_S)
+    est_mus = np.zeros((num_test, num_feats))
+    est_sigmas = np.zeros((num_test, num_feats))
     for fix in range(num_feats):
         if confounder_is_cat:
             if heteroscedastic:
-                pass
+                kernel = CatKernel() + HeteroscedasticKernel()
+                alpha = 0.0
+                gper = GaussianProcessRegressor(
+                    kernel=kernel, alpha=alpha, normalize_y=True,
+                )
             else:
-                pass
+                kernel = CatKernel()
+                alpha = 0.0
+                gper = GaussianProcessRegressor(
+                    kernel=kernel, alpha=alpha, normalize_y=True,
+                )
         else:
             if heteroscedastic:
-                prototypes = KMeans(n_clusters=10).fit(S[:, [fix]]).cluster_centers_
+                prototypes = KMeans(n_clusters=10).fit(Y[:, [fix]]).cluster_centers_
                 kernel = (
-                    C(1.0, (1e-10, 1000)) * RBF(1, (0.01, 100.0))
+                    ConstantKernel(1.0, (1e-10, 1000)) * RBF(1, (0.01, 100.0))
                     + HeteroscedasticKernel.construct(
                         prototypes, 1e-3, (1e-10, 50.0),
-                        gamma=5.0, gamma_bounds="fixed")
+                        gamma=5.0, gamma_bounds="fixed",
+                    )
                 )
                 alpha = 0.0
+                gper = GaussianProcessRegressor(kernel=kernel, alpha=alpha)
             else:
-                pass
-        gper = GaussianProcessRegressor(kernel=kernel, alpha=alpha)
-        gper.fit(S[:, [fix]], X_S)
+                kernel = RBF(length_scale=1, length_scale_bounds=(1, 3e1))
+                alpha = 100.0
+                # XXX or use gp_extras example below:
+                kernel = (
+                    ConstantKernel(1.0, (1e-10, 1000)) * RBF(1, (0.01, 100.0))
+                    + WhiteKernel(1e-3, (1e-10, 50.0))
+                )
+                alpha = 0.0
+                gper = GaussianProcessRegressor(
+                    alpha=alpha, kernel=kernel, random_state=0, 
+                    n_restarts_optimizer=9,
+                )
+
+        gper.fit(Y[:, [fix]], X)
+        est_mu, est_sigma = gper.predict(Ytest[:, [fix]], return_std=True)
+        est_mus[:, fix] = est_mu
+        est_sigmas[:, fix] = est_sigma
+
+    return (est_mus, est_sigmas)
+        
         
 
 class ConDoAdapter(BaseEstimator, TransformerMixin):
