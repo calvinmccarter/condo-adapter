@@ -10,8 +10,28 @@ TODO
 TODO
 
 ## Development
+
 ### Dependency installation
 ```pip install -r requirements.txt```
+
+Then, in a separate directory, clone and install pytorch-minimize:
+```
+git clone https://github.com/rfeinman/pytorch-minimize.git
+cd pytorch-minimize
+pip install -e .
+```
+
+### Editable installation
+In this directory
+```
+pip install -e .
+```
+
+### Testing
+In this directory
+```
+pytest
+```
 
 ### Code formatting
 The Uncompromising Code Formatter: [Black](https://github.com/psf/black)  
