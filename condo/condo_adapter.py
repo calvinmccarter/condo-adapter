@@ -20,6 +20,7 @@ from condo.cat_kernels import (
     HeteroscedasticCatKernel,
 )
 
+
 def joint_conditional_distr(
     D,
     X,
@@ -67,32 +68,38 @@ def independent_conditional_distr(
                 kernel = CatKernel() + HeteroscedasticCatKernel()
                 alpha = 0.0
                 gper = GaussianProcessRegressor(
-                    kernel=kernel, alpha=alpha, normalize_y=True,
+                    kernel=kernel,
+                    alpha=alpha,
+                    normalize_y=True,
                 )
             else:
                 kernel = CatKernel()
                 alpha = 0.0
                 gper = GaussianProcessRegressor(
-                    kernel=kernel, alpha=alpha, normalize_y=True,
+                    kernel=kernel,
+                    alpha=alpha,
+                    normalize_y=True,
                 )
         else:
             if heteroscedastic:
                 prototypes = KMeans(n_clusters=10).fit(X[:, [fix]]).cluster_centers_
                 # hyperparams for HeteroscedasticKernel are from gp_extras-examples
-                kernel = (
-                    ConstantKernel(1.0, (1e-3, 1e3)) * RBF(1, (1e-2, 1e2))
-                    + HeteroscedasticKernel.construct(
-                        prototypes, 1e-3, (1e-10, 50.0),
-                        gamma=5.0, gamma_bounds="fixed",
-                    )
+                kernel = ConstantKernel(1.0, (1e-3, 1e3)) * RBF(
+                    1, (1e-2, 1e2)
+                ) + HeteroscedasticKernel.construct(
+                    prototypes,
+                    1e-3,
+                    (1e-10, 50.0),
+                    gamma=5.0,
+                    gamma_bounds="fixed",
                 )
                 alpha = 0.0
                 gper = GaussianProcessRegressor(
-                    kernel=kernel, alpha=alpha, normalize_y=False)
+                    kernel=kernel, alpha=alpha, normalize_y=False
+                )
             else:
-                kernel = (
-                    ConstantKernel(1.0, (1e-3, 1e3))
-                    * RBF(length_scale=1, length_scale_bounds=(1e-2, 1e2))
+                kernel = ConstantKernel(1.0, (1e-3, 1e3)) * RBF(
+                    length_scale=1, length_scale_bounds=(1e-2, 1e2)
                 )
                 alpha = 100.0
                 # Maybe use the default kernel from gp_extras-examples below:
@@ -104,8 +111,11 @@ def independent_conditional_distr(
                 alpha = 0.0
                 """
                 gper = GaussianProcessRegressor(
-                    alpha=alpha, kernel=kernel, normalize_y=False,
-                    random_state=0, n_restarts_optimizer=9,
+                    alpha=alpha,
+                    kernel=kernel,
+                    normalize_y=False,
+                    random_state=0,
+                    n_restarts_optimizer=9,
                 )
 
         gper.fit(X, D[:, fix])
@@ -159,7 +169,7 @@ class ConDoAdapter:
             raise ValueError(f"invalid multi_confounder: {multi_confounder}")
         if kld_direction not in (None, "forward", "reverse"):
             raise ValueError(f"invalid kld_direction: {kld_direction}")
-        
+
         self.sampling = sampling
         self.joint = joint
         self.multi_confounder = multi_confounder
@@ -183,23 +193,37 @@ class ConDoAdapter:
         num_S = S.shape[0]
         num_T = T.shape[0]
         if X_S is None:
-            X_S = np.tile(np.array(['dummy']), (num_S, 1))
+            X_S = np.tile(np.array(["dummy"]), (num_S, 1))
         if X_T is None:
-            X_T = np.tile(np.array(['dummy']), (num_T, 1))
+            X_T = np.tile(np.array(["dummy"]), (num_T, 1))
         S, X_S = skut.check_X_y(
-            S, X_S, accept_sparse=False, dtype=None, force_all_finite=True,
-            ensure_2d=True, allow_nd=False, multi_output=True,
-            ensure_min_samples=2, ensure_min_features=1, y_numeric=False,
+            S,
+            X_S,
+            accept_sparse=False,
+            dtype=None,
+            force_all_finite=True,
+            ensure_2d=True,
+            allow_nd=False,
+            multi_output=True,
+            ensure_min_samples=2,
+            ensure_min_features=1,
+            y_numeric=False,
         )
         T, X_T = skut.check_X_y(
-            T, X_T, accept_sparse=False, dtype=None, force_all_finite=True,
-            ensure_2d=True, allow_nd=False, multi_output=True,
-            ensure_min_samples=2, ensure_min_features=1, y_numeric=False,
+            T,
+            X_T,
+            accept_sparse=False,
+            dtype=None,
+            force_all_finite=True,
+            ensure_2d=True,
+            allow_nd=False,
+            multi_output=True,
+            ensure_min_samples=2,
+            ensure_min_features=1,
+            y_numeric=False,
         )
-        X_S = skut.check_array(
-            X_S, dtype=None, ensure_2d=True)
-        X_T = skut.check_array(
-            X_T, dtype=None, ensure_2d=True)
+        X_S = skut.check_array(X_S, dtype=None, ensure_2d=True)
+        X_T = skut.check_array(X_T, dtype=None, ensure_2d=True)
         assert S.shape[1] == T.shape[1]
         assert X_S.shape[1] == X_T.shape[1]
 
@@ -219,7 +243,6 @@ class ConDoAdapter:
         else:
             raise ValueError(f"sampling: {self.sampling}")
         num_test = Xtest.shape[0]
-        
 
         if self.joint and num_feats > 1:
             self.m_ = np.eye((num_feats, num_feats))
@@ -233,8 +256,7 @@ class ConDoAdapter:
                 verbose=self.verbose,
             )
             Est_mu_T_all = [
-                torch.from_numpy(est_mu_T_all[[i], :].T)
-                for i in range(num_test)
+                torch.from_numpy(est_mu_T_all[[i], :].T) for i in range(num_test)
             ]
             Est_inv_sigma_T_all = [
                 torch.from_numpy(np.linalg.inv(est_sigma_T_all[i, :, :]))
@@ -249,29 +271,28 @@ class ConDoAdapter:
                 verbose=self.verbose,
             )
             Est_sigma_S_all = [
-                torch.from_numpy(est_sigma_S_all[i, :, :])
-                for i in range(num_test)
+                torch.from_numpy(est_sigma_S_all[i, :, :]) for i in range(num_test)
             ]
             Est_mu_S_all = [
-                torch.from_numpy(est_mu_S_all[[i], :].T)
-                for i in range(num_test)
+                torch.from_numpy(est_mu_S_all[[i], :].T) for i in range(num_test)
             ]
 
             if self.kld_direction == "forward":
                 raise NotImplementedError(
-                    f"(joint, kld_direction): {(self.joint, self.kld_direction)}")
+                    f"(joint, kld_direction): {(self.joint, self.kld_direction)}"
+                )
             elif self.kld_direction == "reverse":
                 # TODO: speedup via explicit gradient torchmin trick
                 def joint_reverse_kl_obj(mb):
-                    M = mb[0:num_feats, :] # (num_feats, num_feats)
-                    b = mb[num_feats, :] # (num_feats,)
-                    
+                    M = mb[0:num_feats, :]  # (num_feats, num_feats)
+                    b = mb[num_feats, :]  # (num_feats,)
+
                     obj = torch.tensor(0.0)
                     for n in range(num_test):
                         # err_n has size (num_feats, 1)
                         err_n = M @ Est_mu_S_all[n] + b - Est_mu_T_all[n]
                         obj += (
-                            -1. * torch.logdet(M @ Est_sigma_S_all[n] @ M)
+                            -1.0 * torch.logdet(M @ Est_sigma_S_all[n] @ M)
                             + torch.einsum(
                                 "ij,ji->",
                                 Est_inv_sigma_T_all[n] @ M,
@@ -280,11 +301,14 @@ class ConDoAdapter:
                             + (err_n.T @ Est_inv_sigma_T_all[n] @ err_n).squeeze()
                         )
                     return obj
-                        
+
                 mb_init = torch.from_numpy(np.hstack([self.m_, self.b_]))
                 res = tm.minimize(
-                    joint_reverse_kl_obj, mb_init, method="l-bfgs",
-                    max_iter=50, disp=0,
+                    joint_reverse_kl_obj,
+                    mb_init,
+                    method="l-bfgs",
+                    max_iter=50,
+                    disp=0,
                 )
                 mb_opt = res.x.numpy()
                 self.M_ = mb[0:num_feats, :]  # (num_feats, num_feats)
@@ -300,7 +324,7 @@ class ConDoAdapter:
                 heteroscedastic=self.heteroscedastic,
                 verbose=self.verbose,
             )
-            est_var_T_all = est_sigma_T_all ** 2
+            est_var_T_all = est_sigma_T_all**2
             (est_mu_S_all, est_sigma_S_all, gpS) = independent_conditional_distr(
                 D=S,
                 X=X_S,
@@ -309,41 +333,52 @@ class ConDoAdapter:
                 heteroscedastic=self.heteroscedastic,
                 verbose=self.verbose,
             )
-            est_var_S_all = est_sigma_S_all ** 2
+            est_var_S_all = est_sigma_S_all**2
             if self.debug:
                 self.gpS_ = gpS
                 self.gpT_ = gpT
             if self.kld_direction == "forward":
-                F_1 = np.mean(est_var_T_all / est_var_S_all, axis=0)
-                F_2 = np.mean((est_mu_T_all ** 2) / est_var_S_all, axis=0)
-                F_3 = np.mean((est_mu_T_all * est_mu_S_all) / est_var_S_all, axis=0)
-                F_4 = np.mean(est_mu_T_all / est_var_S_all, axis=0)
-                F_5 = np.mean((est_mu_S_all ** 2) / est_var_S_all, axis=0)
-                F_6 = np.mean(est_mu_S_all / est_var_S_all, axis=0)
-                F_7 = np.mean(1 / est_var_S_all, axis=0)
+                F_1 = np.mean(est_var_S_all, axis=0)
+                F_2 = np.mean(est_mu_T_all * est_mu_S_all, axis=0)
+                F_3 = np.mean(est_mu_T_all, axis=0)
+                F_4 = np.mean(est_mu_S_all**2, axis=0)
+                F_5 = np.mean(est_mu_S_all, axis=0)
+                F_6 = np.ones(num_feats)
                 for i in range(num_feats):
-                    (f_1, f_2, f_3, f_4, f_5, f_6, f_7) = (
-                        F_1[i], F_2[i], F_3[i], F_4[i], F_5[i], F_6[i], F_7[i]
+                    (f_1, f_2, f_3, f_4, f_5, f_6) = (
+                        F_1[i],
+                        F_2[i],
+                        F_3[i],
+                        F_4[i],
+                        F_5[i],
+                        F_6[i],
                     )
+
                     def forward_kl_obj(mb):
                         m, b = mb[0], mb[1]
                         obj = (
-                            torch.log(m ** 2) + 0.5 * (m ** -2) * (
-                                f_1 + f_2 + f_3 * (-2 * m) + f_4 * (-2 * b)
-                                + f_5 * (m ** 2) + f_6 * (2 * m * b) + f_7 * b * b
-                            )
+                            2 * (m**2) * torch.log(m**2) * f_1
+                            - 2 * m * f_2
+                            - 2 * b * f_3
+                            + (m**2) * f_4
+                            + 2 * m * b * f_5
+                            + (b**2) * f_6
                         )
                         return obj
+
                     mb_init = torch.tensor([1.0, 0.0])
                     res = tm.minimize(
-                        forward_kl_obj, mb_init, method="l-bfgs",
-                        max_iter=50, disp=self.verbose,
+                        forward_kl_obj,
+                        mb_init,
+                        method="l-bfgs",
+                        max_iter=50,
+                        disp=self.verbose,
                     )
                     (self.m_[i], self.b_[i]) = res.x.numpy()
             elif self.kld_direction == "reverse":
                 R_1 = 2 * np.mean(est_var_T_all, axis=0)
                 R_2 = np.mean(est_var_S_all, axis=0)
-                R_3 = np.mean(est_mu_S_all ** 2, axis=0)
+                R_3 = np.mean(est_mu_S_all**2, axis=0)
                 R_4 = 2 * np.mean(est_mu_S_all, axis=0)
                 R_5 = 2 * np.mean(est_mu_S_all * est_mu_T_all, axis=0)
                 R_6 = np.ones(num_feats)
@@ -352,19 +387,35 @@ class ConDoAdapter:
                 # TODO- closed form expression
                 for i in range(num_feats):
                     (r_1, r_2, r_3, r_4, r_5, r_6, r_7) = (
-                        R_1[i], R_2[i], R_3[i], R_4[i], R_5[i], R_6[i], R_7[i],
+                        R_1[i],
+                        R_2[i],
+                        R_3[i],
+                        R_4[i],
+                        R_5[i],
+                        R_6[i],
+                        R_7[i],
                     )
+
                     def reverse_kl_obj(mb):
                         m, b = mb[0], mb[1]
                         obj = (
-                            -2 * r_1 * torch.log(m) + r_2 * (m ** 2) + r_3 * (m ** 2)
-                            + r_4 * m * b - r_5 * m + r_6 * (b ** 2) - r_7 * b
+                            -2 * r_1 * torch.log(m)
+                            + r_2 * (m**2)
+                            + r_3 * (m**2)
+                            + r_4 * m * b
+                            - r_5 * m
+                            + r_6 * (b**2)
+                            - r_7 * b
                         )
                         return obj
+
                     mb_init = torch.tensor([1.0, 0.0])
                     res = tm.minimize(
-                        reverse_kl_obj, mb_init, method="l-bfgs",
-                        max_iter=50, disp=self.verbose,
+                        reverse_kl_obj,
+                        mb_init,
+                        method="l-bfgs",
+                        max_iter=50,
+                        disp=self.verbose,
                     )
                     (self.m_[i], self.b_[i]) = res.x.numpy()
             else:
@@ -373,7 +424,6 @@ class ConDoAdapter:
         self.num_feats_ = num_feats
 
         return self
-
 
     def transform(
         self,
@@ -384,5 +434,3 @@ class ConDoAdapter:
         else:
             adaptedS = self.m_ * S + self.b_
         return adaptedS
-
-
