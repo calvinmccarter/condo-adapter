@@ -78,8 +78,9 @@ def independent_conditional_distr(
         else:
             if heteroscedastic:
                 prototypes = KMeans(n_clusters=10).fit(X[:, [fix]]).cluster_centers_
+                # hyperparams for HeteroscedasticKernel are from gp_extras-examples
                 kernel = (
-                    ConstantKernel(1.0, (1e-10, 1000)) * RBF(1, (0.01, 100.0))
+                    ConstantKernel(1.0, (1e-3, 1e3)) * RBF(1, (1e-2, 1e2))
                     + HeteroscedasticKernel.construct(
                         prototypes, 1e-3, (1e-10, 50.0),
                         gamma=5.0, gamma_bounds="fixed",
@@ -89,9 +90,12 @@ def independent_conditional_distr(
                 gper = GaussianProcessRegressor(
                     kernel=kernel, alpha=alpha, normalize_y=False)
             else:
-                kernel = 1.0 * RBF(length_scale=1, length_scale_bounds=(1, 3e1))
+                kernel = (
+                    ConstantKernel(1.0, (1e-3, 1e3))
+                    * RBF(length_scale=1, length_scale_bounds=(1e-2, 1e2))
+                )
                 alpha = 100.0
-                # XXX or use gp_extras example below:
+                # Maybe use the default kernel from gp_extras-examples below:
                 """
                 kernel = (
                     ConstantKernel(1.0, (1e-10, 1000)) * RBF(1, (0.01, 100.0))
@@ -286,7 +290,6 @@ class ConDoAdapter:
                 self.M_ = mb[0:num_feats, :]  # (num_feats, num_feats)
                 self.b_ = mb[num_feats, :]  # (num_feats,)
         else:
-            print("not joint")
             self.m_ = np.zeros(num_feats)
             self.b_ = np.zeros(num_feats)
             (est_mu_T_all, est_sigma_T_all, gpT) = independent_conditional_distr(
@@ -334,34 +337,34 @@ class ConDoAdapter:
                     mb_init = torch.tensor([1.0, 0.0])
                     res = tm.minimize(
                         forward_kl_obj, mb_init, method="l-bfgs",
-                        max_iter=50, disp=2,
+                        max_iter=50, disp=self.verbose,
                     )
                     (self.m_[i], self.b_[i]) = res.x.numpy()
             elif self.kld_direction == "reverse":
-                R_1 = np.mean(est_var_S_all / est_var_T_all, axis=0)
-                R_2 = np.mean(est_mu_S_all ** 2 / est_var_T_all, axis=0)
-                R_3 = np.mean(2 * est_mu_S_all / est_var_T_all, axis=0)
-                R_4 = np.mean(2 * est_mu_S_all *  est_mu_T_all / est_var_T_all, axis=0)
-                R_5 = np.mean(1 / est_var_T_all, axis=0)
-                R_6 = np.mean(2 * est_mu_S_all / est_var_T_all, axis=0)
+                R_1 = 2 * np.mean(est_var_T_all, axis=0)
+                R_2 = np.mean(est_var_S_all, axis=0)
+                R_3 = np.mean(est_mu_S_all ** 2, axis=0)
+                R_4 = 2 * np.mean(est_mu_S_all, axis=0)
+                R_5 = 2 * np.mean(est_mu_S_all * est_mu_T_all, axis=0)
+                R_6 = np.ones(num_feats)
+                R_7 = 2 * np.mean(est_mu_T_all, axis=0)
+
                 # TODO- closed form expression
                 for i in range(num_feats):
-                    (r_1, r_2, r_3, r_4, r_5, r_6) = (
-                        R_1[i], R_2[i], R_3[i], R_4[i], R_5[i], R_6[i]
+                    (r_1, r_2, r_3, r_4, r_5, r_6, r_7) = (
+                        R_1[i], R_2[i], R_3[i], R_4[i], R_5[i], R_6[i], R_7[i],
                     )
                     def reverse_kl_obj(mb):
                         m, b = mb[0], mb[1]
                         obj = (
-                            -2 * torch.log(m) + (
-                                (m ** 2) * r_1 + (m ** 2) * r_2 + (m * b) * r_3
-                                - m * r_4 + (b ** 2) * r_5 - b * r_6
-                            )
+                            -2 * r_1 * torch.log(m) + r_2 * (m ** 2) + r_3 * (m ** 2)
+                            + r_4 * m * b - r_5 * m + r_6 * (b ** 2) - r_7 * b
                         )
                         return obj
                     mb_init = torch.tensor([1.0, 0.0])
                     res = tm.minimize(
                         reverse_kl_obj, mb_init, method="l-bfgs",
-                        max_iter=50, disp=1,
+                        max_iter=50, disp=self.verbose,
                     )
                     (self.m_[i], self.b_[i]) = res.x.numpy()
             else:
