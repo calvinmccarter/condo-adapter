@@ -2,17 +2,19 @@ import pytest
 import numpy as np
 from condo import ConDoAdapter
 
+
+@pytest.mark.parametrize("sampling", ["proportional", "target"])
 @pytest.mark.parametrize(
-    "sampling", ["proportional", "source", "target"]
+    "model",
+    ["joint", "independent"],
 )
 @pytest.mark.parametrize(
-    "model", ["joint", "independent"],
+    "kld_direction",
+    ["forward", "reverse"],
 )
 @pytest.mark.parametrize(
-    "kld_direction", ["forward", "reverse"],
-)
-@pytest.mark.parametrize(
-    "heteroscedastic", ["heteroscedastic", "homoscedastic"],
+    "heteroscedastic",
+    ["heteroscedastic"],
 )
 def test_1d_continuous(sampling, model, kld_direction, heteroscedastic):
     """Test 1d variable with 1d continuous confounder."""
@@ -34,7 +36,7 @@ def test_1d_continuous(sampling, model, kld_direction, heteroscedastic):
     batch_m = 2
     batch_b = -5
     # The true batch correction from Sbatch to S
-    true_m = 1. / batch_m
+    true_m = 1.0 / batch_m
     true_b = -1 * batch_b / batch_m
 
     X_T = np.sort(np.random.uniform(1, 8, size=(N_T, 1)))
