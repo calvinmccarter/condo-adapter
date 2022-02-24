@@ -314,6 +314,7 @@ class ConDoAdapter:
                 self.M_ = mb[0:num_feats, :]  # (num_feats, num_feats)
                 self.b_ = mb[num_feats, :]  # (num_feats,)
         else:
+            # Not joint: treating features independently
             self.m_ = np.zeros(num_feats)
             self.b_ = np.zeros(num_feats)
             (est_mu_T_all, est_sigma_T_all, gpT) = independent_conditional_distr(
@@ -344,6 +345,7 @@ class ConDoAdapter:
                 F_4 = np.mean(est_mu_S_all**2, axis=0)
                 F_5 = np.mean(est_mu_S_all, axis=0)
                 F_6 = np.ones(num_feats)
+                # Loop over features since independent not joint
                 for i in range(num_feats):
                     (f_1, f_2, f_3, f_4, f_5, f_6) = (
                         F_1[i],
@@ -375,6 +377,19 @@ class ConDoAdapter:
                         disp=self.verbose,
                     )
                     (self.m_[i], self.b_[i]) = res.x.numpy()
+                    if self.debug and i == 0:
+                        m_plot = np.geomspace(self.m_[i] / 10, self.m_[i] * 10, 500)
+                        b_plot = np.linspace(self.b_[i] - 10, self.b_[i] + 10, 200)
+                        self.mb_objs_ = np.zeros((500, 200))
+                        for mix in range(500):
+                            for bix in range(200):
+                                with torch.no_grad():
+                                    self.mb_objs_[mix, bix] = forward_kl_obj(
+                                        torch.tensor([m_plot[mix], b_plot[bix]])
+                                    ).numpy()
+                        self.m_plot_ = m_plot
+                        self.b_plot_ = b_plot
+
             elif self.kld_direction == "reverse":
                 R_1 = 2 * np.mean(est_var_T_all, axis=0)
                 R_2 = np.mean(est_var_S_all, axis=0)
@@ -385,6 +400,7 @@ class ConDoAdapter:
                 R_7 = 2 * np.mean(est_mu_T_all, axis=0)
 
                 # TODO- closed form expression
+                # Loop over features since independent not joint
                 for i in range(num_feats):
                     (r_1, r_2, r_3, r_4, r_5, r_6, r_7) = (
                         R_1[i],
@@ -418,6 +434,18 @@ class ConDoAdapter:
                         disp=self.verbose,
                     )
                     (self.m_[i], self.b_[i]) = res.x.numpy()
+                    if self.debug and i == 0:
+                        m_plot = np.geomspace(self.m_[i] / 10, self.m_[i] * 10, 500)
+                        b_plot = np.linspace(self.b_[i] - 10, self.b_[i] + 10, 200)
+                        self.mb_objs_ = np.zeros((500, 200))
+                        for mix in range(500):
+                            for bix in range(200):
+                                with torch.no_grad():
+                                    self.mb_objs_[mix, bix] = reverse_kl_obj(
+                                        torch.tensor([m_plot[mix], b_plot[bix]])
+                                    ).numpy()
+                        self.m_plot_ = m_plot
+                        self.b_plot_ = b_plot
             else:
                 raise ValueError(f"kld_direction: {self.kld_direction}")
 
