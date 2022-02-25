@@ -1,3 +1,4 @@
+import numpy as np
 
 from sklearn.gaussian_process.kernels import (
     GenericKernelMixin,
@@ -7,10 +8,11 @@ from sklearn.gaussian_process.kernels import (
     RBF,
 )
 
+
 class CatKernel(GenericKernelMixin, Kernel):
     def __init__(self):
         pass
-    
+
     def _f(self, s1, s2):
         """
         kernel value between a pair of categories
@@ -22,7 +24,7 @@ class CatKernel(GenericKernelMixin, Kernel):
         kernel derivative between a pair of categories
         """
         return 0.0 if np.array_equal(s1, s2) else 1.0
-    
+
     def __call__(self, X, Y=None, eval_gradient=False):
         if Y is None:
             Y = X
@@ -45,7 +47,7 @@ class CatKernel(GenericKernelMixin, Kernel):
 class HeteroscedasticCatKernel(GenericKernelMixin, Kernel):
     def __init__(self, noise_dict):
         # XXX - make these hyperparameters fixed
-        self.noise_dict = deepcopy(noise_dict)
+        self.noise_dict = noise_dict
 
     def __call__(self, X, Y=None, eval_gradient=False):
         if Y is not None and eval_gradient:
@@ -71,5 +73,3 @@ class HeteroscedasticCatKernel(GenericKernelMixin, Kernel):
 
     def diag(self, X):
         return np.array([self.noise_dict[x.item()] for x in X])
-
-
