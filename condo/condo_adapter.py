@@ -65,20 +65,31 @@ def independent_conditional_distr(
     for fix in range(num_feats):
         if confounder_is_cat:
             if heteroscedastic:
-                kernel = CatKernel() + HeteroscedasticCatKernel()
+                # Assumes X has single confounder
+                noise_dict = dict(
+                    [
+                        (catname, np.var(D[np.where(X[:, 0] == catname), fix]))
+                        for catname in list(set(list(X[:, 0])))
+                    ]
+                )
+                kernel = CatKernel() + HeteroscedasticCatKernel(noise_dict)
                 alpha = 0.0
                 gper = GaussianProcessRegressor(
                     kernel=kernel,
                     alpha=alpha,
-                    normalize_y=True,
+                    normalize_y=False,
+                    n_restarts_optimizer=9,
                 )
             else:
+                # TODO: not sure about normalize_y
+                # TODO: still provide noise_dict but make homoscedastic
                 kernel = CatKernel()
                 alpha = 0.0
                 gper = GaussianProcessRegressor(
                     kernel=kernel,
                     alpha=alpha,
-                    normalize_y=True,
+                    normalize_y=False,
+                    n_restarts_optimizer=9,
                 )
         else:
             if heteroscedastic:
@@ -95,7 +106,10 @@ def independent_conditional_distr(
                 )
                 alpha = 0.0
                 gper = GaussianProcessRegressor(
-                    kernel=kernel, alpha=alpha, normalize_y=False
+                    kernel=kernel,
+                    alpha=alpha,
+                    normalize_y=False,
+                    n_restarts_optimizer=9,
                 )
             else:
                 kernel = ConstantKernel(1.0, (1e-3, 1e3)) * RBF(
@@ -245,7 +259,7 @@ class ConDoAdapter:
         num_test = Xtest.shape[0]
 
         if self.joint and num_feats > 1:
-            self.m_ = np.eye((num_feats, num_feats))
+            self.m_ = np.eye(num_feats, num_feats)
             self.b_ = np.zeros((1, num_feats))
             (est_mu_T_all, est_sigma_T_all) = joint_conditional_distr(
                 D=T,
@@ -336,8 +350,8 @@ class ConDoAdapter:
             )
             est_var_S_all = est_sigma_S_all**2
             if self.debug:
-                self.gpS_ = gpS
                 self.gpT_ = gpT
+                self.gpS_ = gpS
             if self.kld_direction == "forward":
                 F_1 = np.mean(est_var_S_all, axis=0)
                 F_2 = np.mean(est_mu_T_all * est_mu_S_all, axis=0)
