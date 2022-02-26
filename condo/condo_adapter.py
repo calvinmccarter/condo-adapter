@@ -353,6 +353,9 @@ class ConDoAdapter:
                 self.gpT_ = gpT
                 self.gpS_ = gpS
             if self.kld_direction == "forward":
+                F_0 = np.mean(
+                    est_var_S_all * np.log(est_sigma_S_all / est_sigma_T_all), axis=0
+                )
                 F_1 = np.mean(est_var_S_all, axis=0)
                 F_2 = np.mean(est_mu_T_all * est_mu_S_all, axis=0)
                 F_3 = np.mean(est_mu_T_all, axis=0)
@@ -361,7 +364,8 @@ class ConDoAdapter:
                 F_6 = np.ones(num_feats)
                 # Loop over features since independent not joint
                 for i in range(num_feats):
-                    (f_1, f_2, f_3, f_4, f_5, f_6) = (
+                    (f_0, f_1, f_2, f_3, f_4, f_5, f_6) = (
+                        F_0[i],
                         F_1[i],
                         F_2[i],
                         F_3[i],
@@ -373,7 +377,8 @@ class ConDoAdapter:
                     def forward_kl_obj(mb):
                         m, b = mb[0], mb[1]
                         obj = (
-                            2 * (m**2) * torch.log(m**2) * f_1
+                            +2 * (m**2) * f_0
+                            + 2 * (m**2) * torch.log(m) * f_1
                             - 2 * m * f_2
                             - 2 * b * f_3
                             + (m**2) * f_4
