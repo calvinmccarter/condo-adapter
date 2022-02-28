@@ -432,16 +432,15 @@ class ConDoAdapter:
                     M = mb[0:num_feats, :]  # (num_feats, num_feats)
                     b = (mb[num_feats, :]).view(-1, 1)  # (num_feats, 1)
 
-                    obj = torch.tensor(0.0)
+                    obj = num_test * -1.0 * torch.logdet(M @ Est_Sigma_S @ M)
+                    obj += num_test * torch.einsum(
+                        "ij,ji->",
+                        Est_inv_Sigma_T @ M,
+                        Est_Sigma_S @ M.T,
+                    )
                     for n in range(num_test):
                         # err_n has size (num_feats, 1)
                         err_n = M @ Est_mu_S_all[n] + b - Est_mu_T_all[n]
-                        obj += -1.0 * torch.logdet(M @ Est_Sigma_S @ M)
-                        obj += torch.einsum(
-                            "ij,ji->",
-                            Est_inv_Sigma_T @ M,
-                            Est_Sigma_S @ M.T,
-                        )
                         obj += (err_n.T @ Est_inv_Sigma_T @ err_n).squeeze()
                     return obj
 
