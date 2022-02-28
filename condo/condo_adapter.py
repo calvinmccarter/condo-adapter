@@ -271,10 +271,10 @@ class ConDoAdapter:
     def __init__(
         self,
         sampling: str = "source",
-        joint: bool = False,
+        transform_type: str = "independent",
+        model_type: str = "linear",
         multi_confounder_kernel: str = "sum",
         kld_direction: Union[None, str] = None,
-        model_type: str = "linear",
         verbose: Union[bool, int] = 1,
         debug: bool = False,
     ):
@@ -283,23 +283,26 @@ class ConDoAdapter:
             sampling: How to sample from dataset
                 ("source", "target", "proportional", "equal").
 
-            joint: Whether to model joint distribution over all features.
+            transform_type: Whether to jointly transform all features ("joint"),
+                or to transform each feature independently ("independent").
                 Modeling the joint distribution is slower and allows each
                 adapted feature to be a function of all other features,
                 rather than purely based on that particular feature
                 observation.
 
-            multi_confounder_kernel: How to construct a kernel from multiple
-                confounding variables ("sum", "product"). The default
-                is "sum" because this is less likely to overfit.
+            model_type: Model for features given confounders.
+                ("linear", "homoscedastic-gp", "heteroscedastic-gp").
 
             kld_direction: Direction of the KL-divergence to minimize.
                 Valid options are None, "forward", "reverse".
                 The option "forward" corresponds to D_KL(target || source).
-                By default (with None), uses "reverse" iff joint is True.
+                By default (with None), uses "reverse" if performing joint transform,
+                but uses "forward" if performing independent transform.
 
-            model_type: Model for features given confounders.
-                ("linear", "homoscedastic-gp", "heteroscedastic-gp").
+
+            multi_confounder_kernel: How to construct a kernel from multiple
+                confounding variables ("sum", "product"). The default
+                is "sum" because this is less likely to overfit.
 
             verbose: Bool or integer that indicates the verbosity.
 
@@ -307,22 +310,24 @@ class ConDoAdapter:
         """
         if sampling not in ("source", "target", "proportional", "equal", "optimum"):
             raise ValueError(f"invalid sampling: {sampling}")
+        if transform_type not in ("joint", "independent"):
+            raise ValueError(f"invalid transform_type: {transform_type}")
+        if model_type not in ("linear", "homoscedastic-gp", "heteroscedastic-gp"):
+            raise ValueError(f"invalid model_type: {model_type}")
+        if kld_direction not in (None, "forward", "reverse"):
+            raise ValueError(f"invalid kld_direction: {kld_direction}")
         if multi_confounder_kernel not in ("sum", "product"):
             raise ValueError(
                 f"invalid multi_confounder_kernel: {multi_confounder_kernel}"
             )
-        if kld_direction not in ("forward", "reverse"):
-            raise ValueError(f"invalid kld_direction: {kld_direction}")
-        if model_type not in ("linear", "homoscedastic-gp", "heteroscedastic-gp"):
-            raise ValueError(f"invalid model_type: {model_type}")
-        if joint and model_type != "linear":
+        if transform_type == "joint" and model_type != "linear":
             raise ValueError(f"incompatible (joint, model_type): {(joint, model_type)}")
 
         self.sampling = sampling
-        self.joint = joint
+        self.transform_type = transform_type
+        self.model_type = model_type
         self.multi_confounder_kernel = multi_confounder_kernel
         self.kld_direction = kld_direction
-        self.model_type = model_type
         self.verbose = verbose
         self.debug = debug
 
@@ -340,8 +345,8 @@ class ConDoAdapter:
         """
         num_S = S.shape[0]
         num_T = T.shape[0]
-        assert not np.equal(X_S, X_S[0]).all() or not np.isclose(X_S, X_S[0]).all()
-        assert not np.equal(X_T, X_T[0]).all() or not np.isclose(X_T, X_T[0]).all()
+        assert not (X_S == X_S[0]).all() or not np.isclose(X_S, X_S[0]).all()
+        assert not (X_T == X_T[0]).all() or not np.isclose(X_T, X_T[0]).all()
         S, X_S = skut.check_X_y(
             S,
             X_S,
@@ -390,7 +395,7 @@ class ConDoAdapter:
             raise ValueError(f"sampling: {self.sampling}")
         num_test = Xtest.shape[0]
 
-        if self.joint and num_feats > 1:
+        if self.transform_type == "joint" and num_feats > 1:
             assert self.model_type == "linear"
             self.m_ = None
             self.M_ = np.eye(num_feats, num_feats)
@@ -662,7 +667,7 @@ class ConDoAdapter:
         self,
         S,
     ):
-        if self.joint and self.num_feats_ > 1:
+        if self.transform_type == "joint" and self.num_feats_ > 1:
             adaptedS = (self.M_ @ S.T).T + self.b_.reshape(1, -1)
         else:
             adaptedS = self.m_ * S + self.b_

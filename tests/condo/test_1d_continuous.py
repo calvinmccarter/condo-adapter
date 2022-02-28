@@ -5,21 +5,19 @@ from condo import ConDoAdapter
 
 @pytest.mark.parametrize("sampling", ["proportional", "target"])
 @pytest.mark.parametrize(
-    "model",
-    ["joint", "independent"],
+    "transform_type",
+    ["independent"],
+)
+@pytest.mark.parametrize(
+    "model_type",
+    ["linear", "homoscedastic-gp", "heteroscedastic-gp"],
 )
 @pytest.mark.parametrize(
     "kld_direction",
     ["forward", "reverse"],
 )
-@pytest.mark.parametrize(
-    "heteroscedastic",
-    ["heteroscedastic"],
-)
-def test_1d_continuous(sampling, model, kld_direction, heteroscedastic):
+def test_1d_continuous(sampling, transform_type, model_type, kld_direction):
     """Test 1d variable with 1d continuous confounder."""
-    joint = model == "joint"
-    heteroscedastic = heteroscedastic == "heteroscedastic"
 
     np.random.seed(0)
     N = 300
@@ -53,9 +51,9 @@ def test_1d_continuous(sampling, model, kld_direction, heteroscedastic):
 
     cder = ConDoAdapter(
         sampling=sampling,
-        joint=joint,
+        transform_type=transform_type,
+        model_type=model_type,
         kld_direction=kld_direction,
-        heteroscedastic=heteroscedastic,
     )
 
     cder.fit(Sbatch, T, X_S, X_T)
@@ -63,6 +61,6 @@ def test_1d_continuous(sampling, model, kld_direction, heteroscedastic):
     reldiff_pre = 2 * np.abs(Sbatch - Strue) / (np.abs(Sbatch) + np.abs(Strue))
     reldiff_post = 2 * np.abs(Sadapted - Strue) / (np.abs(Sadapted) + np.abs(Strue))
     np.testing.assert_array_less(reldiff_post.mean(axis=0), reldiff_pre.mean(axis=0))
+    np.testing.assert_allclose(Strue, Sadapted, atol=0.1, rtol=1.0)
     np.testing.assert_allclose(np.array([true_m]), cder.m_, atol=1.0, rtol=1.0)
     np.testing.assert_allclose(np.array([true_b]), cder.b_, atol=1.0, rtol=1.0)
-    np.testing.assert_allclose(Strue, Sadapted, atol=0.1, rtol=1.0)
