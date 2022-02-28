@@ -409,6 +409,7 @@ class ConDoAdapter:
             Est_mu_T_all = [
                 torch.from_numpy(est_mu_T_all[[i], :].T) for i in range(num_test)
             ]
+            Est_Sigma_T = torch.from_numpy(est_Sigma_T)
             Est_inv_Sigma_T = torch.from_numpy(np.linalg.inv(est_Sigma_T))
             (est_mu_S_all, est_Sigma_S) = joint_linear_distr(
                 D=S,
@@ -422,17 +423,46 @@ class ConDoAdapter:
             Est_Sigma_S = torch.from_numpy(est_Sigma_S)
 
             if self.kld_direction == "forward":
-                raise NotImplementedError(
-                    f"(joint, kld_direction): {(self.joint, self.kld_direction)}"
+
+                def joint_forward_kl_obj(mb):
+                    M = mb[0:num_feats, :]  # (num_feats, num_feats)
+                    b = (mb[num_feats, :]).view(-1, 1)  # (num_feats, 1)
+
+                    MSMTinv = torch.linalg.inv(M @ Est_Sigma_S @ M.T)
+
+                    obj = num_test * torch.logdet(M @ Est_Sigma_S @ M.T)
+                    obj += num_test * torch.einsum(
+                        "ij,ji->",
+                        Est_Sigma_T,
+                        MSMTinv,
+                    )
+                    for n in range(num_test):
+                        # err_n has size (num_feats, 1)
+                        err_n = M @ Est_mu_S_all[n] + b - Est_mu_T_all[n]
+                        obj += (err_n.T @ MSMTinv @ err_n).squeeze()
+                    return obj
+
+                mb_init = torch.from_numpy(np.vstack([self.M_, self.b_]))
+                res = tm.minimize(
+                    joint_forward_kl_obj,
+                    mb_init,
+                    method="l-bfgs",
+                    max_iter=50,
+                    disp=self.verbose,
                 )
+                mb_opt = res.x.numpy()
+                self.M_ = mb_opt[0:num_feats, :]  # (num_feats, num_feats)
+                self.b_ = mb_opt[num_feats, :]  # (num_feats,)
+
             elif self.kld_direction == "reverse":
                 # TODO: speedup via explicit gradient torchmin trick
-                # TODO: or speedup using fact that homoscedastic
+                # TODO: or speedup by vectorizing the for-loop
+                # TODO: simplify the logdet(M @ Sigma_S @ M) term
                 def joint_reverse_kl_obj(mb):
                     M = mb[0:num_feats, :]  # (num_feats, num_feats)
                     b = (mb[num_feats, :]).view(-1, 1)  # (num_feats, 1)
 
-                    obj = num_test * -1.0 * torch.logdet(M @ Est_Sigma_S @ M)
+                    obj = num_test * -1.0 * torch.logdet(M @ Est_Sigma_S @ M.T)
                     obj += num_test * torch.einsum(
                         "ij,ji->",
                         Est_inv_Sigma_T @ M,
@@ -450,7 +480,7 @@ class ConDoAdapter:
                     mb_init,
                     method="l-bfgs",
                     max_iter=50,
-                    disp=0,
+                    disp=self.verbose,
                 )
                 mb_opt = res.x.numpy()
                 self.M_ = mb_opt[0:num_feats, :]  # (num_feats, num_feats)
