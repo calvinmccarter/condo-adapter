@@ -518,30 +518,8 @@ class ConDoAdapter:
                 F_5 = np.mean(est_mu_S_all, axis=0)
                 F_6 = np.ones(num_feats)
 
-                C_1 = np.sum(est_mu_T_all / est_var_S_all, axis=0) / np.sum(
-                    1 / est_var_S_all, axis=0
-                )
-                C_2 = np.sum(est_mu_S_all / est_var_S_all, axis=0) / np.sum(
-                    1 / est_var_S_all, axis=0
-                )
-                C_A = np.sum(np.ones((num_test, num_feats)), axis=0, keepdims=True)
-                C_B = np.sum(
-                    (1 / est_var_S_all) * (est_var_T_all + ((C_1 - est_mu_T_all) ** 2)),
-                    axis=0,
-                    keepdims=True,
-                )
-                C_C = np.sum(
-                    2 * 1 * (est_mu_S_all - C_2) * (C_1 - est_mu_T_all) / est_var_S_all,
-                    axis=0,
-                    keepdims=True,
-                )
-                # Computes m and b
-                hatm = (C_C + np.sqrt((C_C**2) + 16 * C_A * C_B)) / (4 * C_A)
-                hatb = C_1 - C_2 * hatm
-
                 # Loop over features since independent not joint
                 for i in range(num_feats):
-                    # TODO- delete this
                     (f_0, f_1, f_2, f_3, f_4, f_5, f_6) = (
                         F_0[i],
                         F_1[i],
@@ -574,7 +552,6 @@ class ConDoAdapter:
                         disp=self.verbose,
                     )
                     (self.m_[i], self.b_[i]) = res.x.numpy()
-                    # (self.m_[i], self.b_[i]) = (hatm[0,i], hatb[0,i])
 
                     if self.debug and i == 0:
                         m_plot = np.geomspace(self.m_[i] / 10, self.m_[i] * 10, 500)
@@ -598,17 +575,6 @@ class ConDoAdapter:
                 R_6 = np.ones(num_feats)
                 R_7 = 2 * np.mean(est_mu_T_all, axis=0)
 
-                C_1 = np.mean(est_mu_T_all, axis=0, keepdims=True)
-                C_2 = np.mean(est_mu_S_all, axis=0, keepdims=True)
-                C_C = -1 * np.mean(est_var_T_all, axis=0, keepdims=True)
-                C_A = np.mean(est_var_S_all, axis=0) + np.mean(
-                    (est_mu_S_all - C_2) ** 2, axis=0
-                )
-                C_B = np.mean((C_1 - est_mu_T_all) * (est_mu_S_all - C_2), axis=0)
-                hatm = (-C_B + np.sqrt(C_B**2 - 4 * C_A * C_C)) / (2 * C_A)
-                hatb = C_1 - C_2 * hatm
-
-                # TODO- closed form expression
                 # Loop over features since independent not joint
                 for i in range(num_feats):
                     (r_1, r_2, r_3, r_4, r_5, r_6, r_7) = (
@@ -643,7 +609,6 @@ class ConDoAdapter:
                         disp=self.verbose,
                     )
                     (self.m_[i], self.b_[i]) = res.x.numpy()
-                    # (self.m_[i], self.b_[i]) = (hatm[0,i], hatb[0,i])
                     if self.debug and i == 0:
                         m_plot = np.geomspace(self.m_[i] / 10, self.m_[i] * 10, 500)
                         b_plot = np.linspace(self.b_[i] - 10, self.b_[i] + 10, 200)
