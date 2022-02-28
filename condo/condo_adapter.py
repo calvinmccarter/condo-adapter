@@ -7,12 +7,17 @@ import torchmin as tm
 import sklearn.utils as skut
 
 from sklearn.cluster import KMeans
+from sklearn.compose import make_column_transformer
+from sklearn.compose import make_column_selector
+from sklearn.covariance import GraphicalLassoCV
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import (
     ConstantKernel,
     RBF,
     WhiteKernel,
 )
+from sklearn.linear_model import RidgeCV
+from sklearn.preprocessing import OneHotEncoder
 
 from condo.heteroscedastic_kernel import HeteroscedasticKernel
 from condo.cat_kernels import (
@@ -21,35 +26,113 @@ from condo.cat_kernels import (
 )
 
 
-def joint_conditional_distr(
-    D,
-    X,
-    Xtest,
-    multi_confounder: str = "sum",
-    heteroscedastic: bool = True,
-    verbose: Union[bool, int] = 1,
+def joint_linear_distr(
+    D: np.ndarray,
+    X: np.ndarray,
+    Xtest: np.ndarray,
+    verbose: Union[bool, int] = 0,
 ):
-    raise NotImplementedError("joint_conditional_distr")
+    """
+    Args:
+        D: (num_train, num_feats)
+        X: (num_train, num_confounders)
+        Xtest: (num_test, num_confounders)
+
+    Returns:
+        est_mus: (num_test, num_feats)
+        est_Sigma: (num_feats, num_feats)
+    """
+    num_test = Xtest.shape[0]
+    num_feats = D.shape[1]
+    oher = make_column_transformer(
+        (
+            OneHotEncoder(sparse=False, handle_unknown="ignore"),
+            make_column_selector(dtype_include="category"),
+        ),
+        remainder="passthrough",
+    )
+    XandXtest_df = pd.DataFrame(np.vstack([X, Xtest]))
+    oher.fit(XandXtest_df)
+    encodedX = oher.transform(pd.DataFrame(X))
+    encodedXtest = oher.transform(pd.DataFrame(Xtest))
+
+    ridger = RidgeCV(alpha_per_target=True)
+    ridger.fit(encodedX, D)
+    predD = ridger.predict(encodedX)
+    residD = predD - D
+    glassoer = GraphicalLassoCV(verbose=verbose)
+    glassoer.fit(residD)
+
+    est_Sigma = glassoer.covariance_
+    est_mus = ridger.predict(Xtest)
+    return (est_mus, est_Sigma)
 
 
-def independent_conditional_distr(
-    D,
-    X,
-    Xtest,
-    multi_confounder: str = "sum",
-    heteroscedastic: bool = True,
+def independent_linear_distr(
+    D: np.ndarray,
+    X: np.ndarray,
+    Xtest: np.ndarray,
+    verbose: Union[bool, int] = 0,
+):
+    """
+    Args:
+        D: (num_train, num_feats)
+        X: (num_train, num_confounders)
+        Xtest: (num_test, num_confounders)
+
+    Returns:
+        est_mus: (num_test, num_feats)
+        est_sigmas: (num_test, num_feats)
+    """
+    num_test = Xtest.shape[0]
+    num_feats = D.shape[1]
+    """
+    oher = make_column_transformer(
+        (
+            OneHotEncoder(sparse=False, handle_unknown="ignore"),
+            make_column_selector(dtype_include="category"),
+        ),
+        remainder="passthrough",
+    )
+    XandXtest = np.vstack([X, Xtest])
+    oher.fit(XandXtest)
+    encodedX = oher.transform(X)
+    encodedXtest = oher.transform(Xtest)
+    """
+    encodedX = X
+    encodedXtest = Xtest
+
+    ridger = RidgeCV(alpha_per_target=True)
+    ridger.fit(encodedX, D)
+    predD = ridger.predict(encodedX)
+    predDtest = ridger.predict(encodedXtest)
+    est_mus = predDtest
+
+    residD = predD - D
+    est_sigmas = np.std(residD, axis=0, keepdims=True)
+    est_sigmas = np.tile(est_sigmas, (num_test, 1))
+
+    return (est_mus, est_sigmas)
+
+
+def heteroscedastic_gp_distr(
+    D: np.ndarray,
+    X: np.ndarray,
+    Xtest: np.ndarray,
+    multi_confounder_kernel: str = "sum",
     verbose: Union[bool, int] = 1,
 ):
     """
     Args:
-        asdf
+        D: (num_train, num_feats)
+        X: (num_train, num_confounders)
+        Xtest: (num_test, num_confounders)
+        multi_confounder_kernel:
+        verbose:
 
     Returns:
-        est_mus:
-            (Xtest.shape[0], D.shape[1])
-
-        est_sigmas:
-            (Xtest.shape[0], D.shape[1])
+        est_mus: (num_test, num_feats)
+        est_sigmas: (num_test, num_feats)
     """
     num_test = Xtest.shape[0]
     num_feats = D.shape[1]
@@ -57,80 +140,45 @@ def independent_conditional_distr(
     if num_confounders > 1:
         raise NotImplementedError(f"num_confounders {num_confounders}")
     confounder_is_cat = (X.dtype == bool) or not np.issubdtype(X.dtype, np.number)
-    if confounder_is_cat and not heteroscedastic:
-        print("warning: homoscedastic with categorical not recommended")
 
     est_mus = np.zeros((num_test, num_feats))
     est_sigmas = np.zeros((num_test, num_feats))
     for fix in range(num_feats):
         if confounder_is_cat:
-            if heteroscedastic:
-                # Assumes X has single confounder
-                noise_dict = dict(
-                    [
-                        (catname, np.var(D[np.where(X[:, 0] == catname), fix]))
-                        for catname in list(set(list(X[:, 0])))
-                    ]
-                )
-                kernel = CatKernel() + HeteroscedasticCatKernel(noise_dict)
-                alpha = 0.0
-                gper = GaussianProcessRegressor(
-                    kernel=kernel,
-                    alpha=alpha,
-                    normalize_y=False,
-                    n_restarts_optimizer=9,
-                )
-            else:
-                # TODO: not sure about normalize_y
-                # TODO: still provide noise_dict but make homoscedastic
-                kernel = CatKernel()
-                alpha = 0.0
-                gper = GaussianProcessRegressor(
-                    kernel=kernel,
-                    alpha=alpha,
-                    normalize_y=False,
-                    n_restarts_optimizer=9,
-                )
+            # Assumes X has single confounder
+            noise_dict = dict(
+                [
+                    (catname, np.var(D[np.where(X[:, 0] == catname), fix]))
+                    for catname in list(set(list(X[:, 0])))
+                ]
+            )
+            kernel = CatKernel() + HeteroscedasticCatKernel(noise_dict)
+            alpha = 0.0
+            gper = GaussianProcessRegressor(
+                kernel=kernel,
+                alpha=alpha,
+                normalize_y=False,
+                n_restarts_optimizer=9,
+            )
         else:
-            if heteroscedastic:
-                prototypes = KMeans(n_clusters=10).fit(X[:, [fix]]).cluster_centers_
-                # hyperparams for HeteroscedasticKernel are from gp_extras-examples
-                kernel = ConstantKernel(1.0, (1e-3, 1e3)) * RBF(
-                    1, (1e-2, 1e2)
-                ) + HeteroscedasticKernel.construct(
-                    prototypes,
-                    1e-3,
-                    (1e-10, 50.0),
-                    gamma=5.0,
-                    gamma_bounds="fixed",
-                )
-                alpha = 0.0
-                gper = GaussianProcessRegressor(
-                    kernel=kernel,
-                    alpha=alpha,
-                    normalize_y=False,
-                    n_restarts_optimizer=9,
-                )
-            else:
-                kernel = ConstantKernel(1.0, (1e-3, 1e3)) * RBF(
-                    length_scale=1, length_scale_bounds=(1e-2, 1e2)
-                )
-                alpha = 100.0
-                # Maybe use the default kernel from gp_extras-examples below:
-                """
-                kernel = (
-                    ConstantKernel(1.0, (1e-10, 1000)) * RBF(1, (0.01, 100.0))
-                    + WhiteKernel(1e-3, (1e-10, 50.0))
-                )
-                alpha = 0.0
-                """
-                gper = GaussianProcessRegressor(
-                    alpha=alpha,
-                    kernel=kernel,
-                    normalize_y=False,
-                    random_state=0,
-                    n_restarts_optimizer=9,
-                )
+            prototypes = KMeans(n_clusters=10).fit(X).cluster_centers_
+            # hyperparams for HeteroscedasticKernel are from gp_extras-examples
+            kernel = ConstantKernel(1.0, (1e-3, 1e3)) * RBF(
+                1, (1e-2, 1e2)
+            ) + HeteroscedasticKernel.construct(
+                prototypes,
+                1e-3,
+                (1e-10, 50.0),
+                gamma=5.0,
+                gamma_bounds="fixed",
+            )
+            alpha = 0.0
+            gper = GaussianProcessRegressor(
+                kernel=kernel,
+                alpha=alpha,
+                normalize_y=False,
+                n_restarts_optimizer=9,
+            )
 
         gper.fit(X, D[:, fix])
 
@@ -139,7 +187,84 @@ def independent_conditional_distr(
         est_mus[:, fix] = est_mu
         est_sigmas[:, fix] = est_sigma
 
-    return (est_mus, est_sigmas, gper)
+    return (est_mus, est_sigmas)
+
+
+def homoscedastic_gp_distr(
+    D: np.ndarray,
+    X: np.ndarray,
+    Xtest: np.ndarray,
+    multi_confounder_kernel: str = "sum",
+    verbose: Union[bool, int] = 1,
+):
+    """
+    Args:
+        D: (num_train, num_feats)
+        X: (num_train, num_confounders)
+        Xtest: (num_test, num_confounders)
+        multi_confounder_kernel:
+        verbose:
+
+    Returns:
+        est_mus: (num_test, num_feats)
+        est_sigmas: (num_test, num_feats)
+    """
+    num_test = Xtest.shape[0]
+    num_feats = D.shape[1]
+    num_confounders = X.shape[1]
+    if num_confounders > 1:
+        raise NotImplementedError(f"num_confounders {num_confounders}")
+    confounder_is_cat = (X.dtype == bool) or not np.issubdtype(X.dtype, np.number)
+    if confounder_is_cat:
+        print("warning: homoscedastic with categorical not recommended")
+
+    est_mus = np.zeros((num_test, num_feats))
+    est_sigmas = np.zeros((num_test, num_feats))
+    for fix in range(num_feats):
+        if confounder_is_cat:
+            # TODO: not sure about normalize_y
+            kernel = CatKernel()
+            noise_dict = dict(
+                [(catname, np.var(D[:, fix])) for catname in list(set(list(X[:, 0])))]
+            )
+            kernel = CatKernel() + HeteroscedasticCatKernel(noise_dict)
+
+            alpha = 1e-3
+            gper = GaussianProcessRegressor(
+                kernel=kernel,
+                alpha=alpha,
+                normalize_y=False,
+                n_restarts_optimizer=9,
+            )
+        else:
+            kernel = ConstantKernel(1.0, (1e-3, 1e3)) * RBF(
+                length_scale=1, length_scale_bounds=(1e-2, 1e2)
+            )
+            alpha = 100.0
+            # Maybe use the default kernel from gp_extras-examples below:
+            """
+            kernel = (
+                ConstantKernel(1.0, (1e-10, 1000)) * RBF(1, (0.01, 100.0))
+                + WhiteKernel(1e-3, (1e-10, 50.0))
+            )
+            alpha = 0.0
+            """
+            gper = GaussianProcessRegressor(
+                alpha=alpha,
+                kernel=kernel,
+                normalize_y=False,
+                random_state=0,
+                n_restarts_optimizer=9,
+            )
+
+        gper.fit(X, D[:, fix])
+
+        # TODO: make faster when Xtest rows are not unique
+        (est_mu, est_sigma) = gper.predict(Xtest, return_std=True)
+        est_mus[:, fix] = est_mu
+        est_sigmas[:, fix] = est_sigma
+
+    return (est_mus, est_sigmas)
 
 
 class ConDoAdapter:
@@ -147,9 +272,9 @@ class ConDoAdapter:
         self,
         sampling: str = "source",
         joint: bool = False,
-        multi_confounder: str = "sum",
+        multi_confounder_kernel: str = "sum",
         kld_direction: Union[None, str] = None,
-        heteroscedastic: bool = True,
+        model_type: str = "linear",
         verbose: Union[bool, int] = 1,
         debug: bool = False,
     ):
@@ -164,7 +289,7 @@ class ConDoAdapter:
                 rather than purely based on that particular feature
                 observation.
 
-            multi_confounder: How to construct a kernel from multiple
+            multi_confounder_kernel: How to construct a kernel from multiple
                 confounding variables ("sum", "product"). The default
                 is "sum" because this is less likely to overfit.
 
@@ -173,31 +298,40 @@ class ConDoAdapter:
                 The option "forward" corresponds to D_KL(target || source).
                 By default (with None), uses "reverse" iff joint is True.
 
+            model_type: Model for features given confounders.
+                ("linear", "homoscedastic-gp", "heteroscedastic-gp").
+
             verbose: Bool or integer that indicates the verbosity.
 
             debug: Whether to save state for debugging.
         """
         if sampling not in ("source", "target", "proportional", "equal", "optimum"):
             raise ValueError(f"invalid sampling: {sampling}")
-        if multi_confounder not in ("sum", "product"):
-            raise ValueError(f"invalid multi_confounder: {multi_confounder}")
-        if kld_direction not in (None, "forward", "reverse"):
+        if multi_confounder_kernel not in ("sum", "product"):
+            raise ValueError(
+                f"invalid multi_confounder_kernel: {multi_confounder_kernel}"
+            )
+        if kld_direction not in ("forward", "reverse"):
             raise ValueError(f"invalid kld_direction: {kld_direction}")
+        if model_type not in ("linear", "homoscedastic-gp", "heteroscedastic-gp"):
+            raise ValueError(f"invalid model_type: {model_type}")
+        if joint and model_type != "linear":
+            raise ValueError(f"incompatible (joint, model_type): {(joint, model_type)}")
 
         self.sampling = sampling
         self.joint = joint
-        self.multi_confounder = multi_confounder
+        self.multi_confounder_kernel = multi_confounder_kernel
         self.kld_direction = kld_direction
-        self.heteroscedastic = heteroscedastic
+        self.model_type = model_type
         self.verbose = verbose
         self.debug = debug
 
     def fit(
         self,
-        S,
-        T,
-        X_S: Union[np.ndarray, pd.DataFrame] = None,
-        X_T: Union[np.ndarray, pd.DataFrame] = None,
+        S: np.ndarray,
+        T: np.ndarray,
+        X_S: np.ndarray,
+        X_T: np.ndarray,
     ):
         """
 
@@ -206,10 +340,8 @@ class ConDoAdapter:
         """
         num_S = S.shape[0]
         num_T = T.shape[0]
-        if X_S is None:
-            X_S = np.tile(np.array(["dummy"]), (num_S, 1))
-        if X_T is None:
-            X_T = np.tile(np.array(["dummy"]), (num_T, 1))
+        assert not np.equal(X_S, X_S[0]).all() or not np.isclose(X_S, X_S[0]).all()
+        assert not np.equal(X_T, X_T[0]).all() or not np.isclose(X_T, X_T[0]).all()
         S, X_S = skut.check_X_y(
             S,
             X_S,
@@ -259,37 +391,30 @@ class ConDoAdapter:
         num_test = Xtest.shape[0]
 
         if self.joint and num_feats > 1:
-            self.m_ = np.eye(num_feats, num_feats)
+            assert self.model_type == "linear"
+            self.m_ = None
+            self.M_ = np.eye(num_feats, num_feats)
             self.b_ = np.zeros((1, num_feats))
-            (est_mu_T_all, est_sigma_T_all) = joint_conditional_distr(
+            (est_mu_T_all, est_Sigma_T) = joint_linear_distr(
                 D=T,
                 X=X_T,
                 Xtest=Xtest,
-                multi_confounder=self.multi_confounder,
-                heteroscedastic=self.heteroscedastic,
                 verbose=self.verbose,
             )
             Est_mu_T_all = [
                 torch.from_numpy(est_mu_T_all[[i], :].T) for i in range(num_test)
             ]
-            Est_inv_sigma_T_all = [
-                torch.from_numpy(np.linalg.inv(est_sigma_T_all[i, :, :]))
-                for i in range(num_test)
-            ]
-            (est_mu_S_all, est_sigma_S_all) = joint_conditional_distr(
+            Est_inv_Sigma_T = torch.from_numpy(np.linalg.inv(est_Sigma_T))
+            (est_mu_S_all, est_Sigma_S) = joint_linear_distr(
                 D=S,
                 X=X_S,
                 Xtest=Xtest,
-                multi_confounder=self.multi_confounder,
-                heteroscedastic=self.heteroscedastic,
                 verbose=self.verbose,
             )
-            Est_sigma_S_all = [
-                torch.from_numpy(est_sigma_S_all[i, :, :]) for i in range(num_test)
-            ]
             Est_mu_S_all = [
                 torch.from_numpy(est_mu_S_all[[i], :].T) for i in range(num_test)
             ]
+            Est_Sigma_S = torch.from_numpy(est_Sigma_S)
 
             if self.kld_direction == "forward":
                 raise NotImplementedError(
@@ -297,26 +422,25 @@ class ConDoAdapter:
                 )
             elif self.kld_direction == "reverse":
                 # TODO: speedup via explicit gradient torchmin trick
+                # TODO: or speedup using fact that homoscedastic
                 def joint_reverse_kl_obj(mb):
                     M = mb[0:num_feats, :]  # (num_feats, num_feats)
-                    b = mb[num_feats, :]  # (num_feats,)
+                    b = (mb[num_feats, :]).view(-1, 1)  # (num_feats, 1)
 
                     obj = torch.tensor(0.0)
                     for n in range(num_test):
                         # err_n has size (num_feats, 1)
                         err_n = M @ Est_mu_S_all[n] + b - Est_mu_T_all[n]
-                        obj += (
-                            -1.0 * torch.logdet(M @ Est_sigma_S_all[n] @ M)
-                            + torch.einsum(
-                                "ij,ji->",
-                                Est_inv_sigma_T_all[n] @ M,
-                                Est_sigma_S_all[n] @ M.T,
-                            )
-                            + (err_n.T @ Est_inv_sigma_T_all[n] @ err_n).squeeze()
+                        obj += -1.0 * torch.logdet(M @ Est_Sigma_S @ M)
+                        obj += torch.einsum(
+                            "ij,ji->",
+                            Est_inv_Sigma_T @ M,
+                            Est_Sigma_S @ M.T,
                         )
+                        obj += (err_n.T @ Est_inv_Sigma_T @ err_n).squeeze()
                     return obj
 
-                mb_init = torch.from_numpy(np.hstack([self.m_, self.b_]))
+                mb_init = torch.from_numpy(np.vstack([self.M_, self.b_]))
                 res = tm.minimize(
                     joint_reverse_kl_obj,
                     mb_init,
@@ -325,33 +449,59 @@ class ConDoAdapter:
                     disp=0,
                 )
                 mb_opt = res.x.numpy()
-                self.M_ = mb[0:num_feats, :]  # (num_feats, num_feats)
-                self.b_ = mb[num_feats, :]  # (num_feats,)
+                self.M_ = mb_opt[0:num_feats, :]  # (num_feats, num_feats)
+                self.b_ = mb_opt[num_feats, :]  # (num_feats,)
         else:
             # Not joint: treating features independently
+            self.M_ = None
             self.m_ = np.zeros(num_feats)
             self.b_ = np.zeros(num_feats)
-            (est_mu_T_all, est_sigma_T_all, gpT) = independent_conditional_distr(
-                D=T,
-                X=X_T,
-                Xtest=Xtest,
-                multi_confounder=self.multi_confounder,
-                heteroscedastic=self.heteroscedastic,
-                verbose=self.verbose,
-            )
+            if self.model_type == "linear":
+                (est_mu_T_all, est_sigma_T_all) = independent_linear_distr(
+                    D=T,
+                    X=X_T,
+                    Xtest=Xtest,
+                    verbose=self.verbose,
+                )
+                (est_mu_S_all, est_sigma_S_all) = independent_linear_distr(
+                    D=S,
+                    X=X_S,
+                    Xtest=Xtest,
+                    verbose=self.verbose,
+                )
+            elif self.model_type == "homoscedastic-gp":
+                (est_mu_T_all, est_sigma_T_all) = homoscedastic_gp_distr(
+                    D=T,
+                    X=X_T,
+                    Xtest=Xtest,
+                    multi_confounder_kernel=self.multi_confounder_kernel,
+                    verbose=self.verbose,
+                )
+                (est_mu_S_all, est_sigma_S_all) = homoscedastic_gp_distr(
+                    D=S,
+                    X=X_S,
+                    Xtest=Xtest,
+                    multi_confounder_kernel=self.multi_confounder_kernel,
+                    verbose=self.verbose,
+                )
+            elif self.model_type == "heteroscedastic-gp":
+                (est_mu_T_all, est_sigma_T_all) = heteroscedastic_gp_distr(
+                    D=T,
+                    X=X_T,
+                    Xtest=Xtest,
+                    multi_confounder_kernel=self.multi_confounder_kernel,
+                    verbose=self.verbose,
+                )
+                (est_mu_S_all, est_sigma_S_all) = heteroscedastic_gp_distr(
+                    D=S,
+                    X=X_S,
+                    Xtest=Xtest,
+                    multi_confounder_kernel=self.multi_confounder_kernel,
+                    verbose=self.verbose,
+                )
+
             est_var_T_all = est_sigma_T_all**2
-            (est_mu_S_all, est_sigma_S_all, gpS) = independent_conditional_distr(
-                D=S,
-                X=X_S,
-                Xtest=Xtest,
-                multi_confounder=self.multi_confounder,
-                heteroscedastic=self.heteroscedastic,
-                verbose=self.verbose,
-            )
             est_var_S_all = est_sigma_S_all**2
-            if self.debug:
-                self.gpT_ = gpT
-                self.gpS_ = gpS
             if self.kld_direction == "forward":
                 F_0 = np.mean(
                     est_var_S_all * np.log(est_sigma_S_all / est_sigma_T_all), axis=0
@@ -362,8 +512,31 @@ class ConDoAdapter:
                 F_4 = np.mean(est_mu_S_all**2, axis=0)
                 F_5 = np.mean(est_mu_S_all, axis=0)
                 F_6 = np.ones(num_feats)
+
+                C_1 = np.sum(est_mu_T_all / est_var_S_all, axis=0) / np.sum(
+                    1 / est_var_S_all, axis=0
+                )
+                C_2 = np.sum(est_mu_S_all / est_var_S_all, axis=0) / np.sum(
+                    1 / est_var_S_all, axis=0
+                )
+                C_A = np.sum(np.ones((num_test, num_feats)), axis=0, keepdims=True)
+                C_B = np.sum(
+                    (1 / est_var_S_all) * (est_var_T_all + ((C_1 - est_mu_T_all) ** 2)),
+                    axis=0,
+                    keepdims=True,
+                )
+                C_C = np.sum(
+                    2 * 1 * (est_mu_S_all - C_2) * (C_1 - est_mu_T_all) / est_var_S_all,
+                    axis=0,
+                    keepdims=True,
+                )
+                # Computes m and b
+                hatm = (C_C + np.sqrt((C_C**2) + 16 * C_A * C_B)) / (4 * C_A)
+                hatb = C_1 - C_2 * hatm
+
                 # Loop over features since independent not joint
                 for i in range(num_feats):
+                    # TODO- delete this
                     (f_0, f_1, f_2, f_3, f_4, f_5, f_6) = (
                         F_0[i],
                         F_1[i],
@@ -396,6 +569,8 @@ class ConDoAdapter:
                         disp=self.verbose,
                     )
                     (self.m_[i], self.b_[i]) = res.x.numpy()
+                    # (self.m_[i], self.b_[i]) = (hatm[0,i], hatb[0,i])
+
                     if self.debug and i == 0:
                         m_plot = np.geomspace(self.m_[i] / 10, self.m_[i] * 10, 500)
                         b_plot = np.linspace(self.b_[i] - 10, self.b_[i] + 10, 200)
@@ -417,6 +592,16 @@ class ConDoAdapter:
                 R_5 = 2 * np.mean(est_mu_S_all * est_mu_T_all, axis=0)
                 R_6 = np.ones(num_feats)
                 R_7 = 2 * np.mean(est_mu_T_all, axis=0)
+
+                C_1 = np.mean(est_mu_T_all, axis=0, keepdims=True)
+                C_2 = np.mean(est_mu_S_all, axis=0, keepdims=True)
+                C_C = -1 * np.mean(est_var_T_all, axis=0, keepdims=True)
+                C_A = np.mean(est_var_S_all, axis=0) + np.mean(
+                    (est_mu_S_all - C_2) ** 2, axis=0
+                )
+                C_B = np.mean((C_1 - est_mu_T_all) * (est_mu_S_all - C_2), axis=0)
+                hatm = (-C_B + np.sqrt(C_B**2 - 4 * C_A * C_C)) / (2 * C_A)
+                hatb = C_1 - C_2 * hatm
 
                 # TODO- closed form expression
                 # Loop over features since independent not joint
@@ -453,6 +638,7 @@ class ConDoAdapter:
                         disp=self.verbose,
                     )
                     (self.m_[i], self.b_[i]) = res.x.numpy()
+                    # (self.m_[i], self.b_[i]) = (hatm[0,i], hatb[0,i])
                     if self.debug and i == 0:
                         m_plot = np.geomspace(self.m_[i] / 10, self.m_[i] * 10, 500)
                         b_plot = np.linspace(self.b_[i] - 10, self.b_[i] + 10, 200)
