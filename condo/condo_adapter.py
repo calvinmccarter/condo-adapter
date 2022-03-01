@@ -277,7 +277,7 @@ class ConDoAdapter:
         transform_type: str = "independent",
         model_type: str = "linear",
         multi_confounder_kernel: str = "sum",
-        kld_direction: Union[None, str] = None,
+        divergence: Union[None, str] = None,
         verbose: Union[bool, int] = 1,
         debug: bool = False,
     ):
@@ -294,14 +294,13 @@ class ConDoAdapter:
                 observation.
 
             model_type: Model for features given confounders.
-                ("linear", "homoscedastic-gp", "heteroscedastic-gp").
+                ("linear", "homoscedastic-gp", "heteroscedastic-gp", "empirical").
 
-            kld_direction: Direction of the KL-divergence to minimize.
-                Valid options are None, "forward", "reverse".
+            divergence: Direction of the KL-divergence to minimize.
+                Valid options are None, "forward", "reverse", "mmd".
                 The option "forward" corresponds to D_KL(target || source).
                 By default (with None), uses "reverse" if performing joint transform,
                 but uses "forward" if performing independent transform.
-
 
             multi_confounder_kernel: How to construct a kernel from multiple
                 confounding variables ("sum", "product"). The default
@@ -315,22 +314,37 @@ class ConDoAdapter:
             raise ValueError(f"invalid sampling: {sampling}")
         if transform_type not in ("joint", "independent"):
             raise ValueError(f"invalid transform_type: {transform_type}")
-        if model_type not in ("linear", "homoscedastic-gp", "heteroscedastic-gp"):
+        if model_type not in (
+            "linear",
+            "homoscedastic-gp",
+            "heteroscedastic-gp",
+            "empirical",
+        ):
             raise ValueError(f"invalid model_type: {model_type}")
-        if kld_direction not in (None, "forward", "reverse"):
-            raise ValueError(f"invalid kld_direction: {kld_direction}")
+        if divergence not in (None, "forward", "reverse", "mmd"):
+            raise ValueError(f"invalid divergence: {divergence}")
         if multi_confounder_kernel not in ("sum", "product"):
             raise ValueError(
                 f"invalid multi_confounder_kernel: {multi_confounder_kernel}"
             )
-        if transform_type == "joint" and model_type != "linear":
-            raise ValueError(f"incompatible (joint, model_type): {(joint, model_type)}")
+        if transform_type == "joint" and model_type not in ("linear", "empirical"):
+            raise ValueError(
+                f"incompatible (transform_type, model_type): {(transform_type, model_type)}"
+            )
+        if (model_type == "empirical") != (divergence == "mmd"):
+            raise ValueError(
+                f"incompatible (model_type, divergence): {(model_type, divergence)}"
+            )
+        if divergence == "mmd" and transform_type == "independent":
+            raise NotImplementedError(
+                f"(transform_type, divergence): {(transform_type, divergence)}"
+            )
 
         self.sampling = sampling
         self.transform_type = transform_type
         self.model_type = model_type
         self.multi_confounder_kernel = multi_confounder_kernel
-        self.kld_direction = kld_direction
+        self.divergence = divergence
         self.verbose = verbose
         self.debug = debug
 
@@ -397,6 +411,85 @@ class ConDoAdapter:
         else:
             raise ValueError(f"sampling: {self.sampling}")
         num_test = Xtest.shape[0]
+        if self.divergence == "mmd":
+            self.m_ = None
+            self.M_ = np.eye(num_feats, num_feats)
+            self.b_ = np.zeros((1, num_feats))
+            num_consample = min(10, num_test)
+            num_srcsample = min(20, num_S)
+            num_tgtsample = min(20, num_T)
+            consample_ixs = np.random.choice(
+                num_test, size=num_consample, replace=False
+            )
+            X_consample = Xtest[consample_ixs, :]
+            confounder_is_cat = (Xtest.dtype == bool) or not np.issubdtype(
+                Xtest.dtype, np.number
+            )
+            assert not confounder_is_cat
+            target_kernel = 1.0 * RBF(length_scale=1.0)
+            target_similarities = target_kernel(
+                X_T, X_consample
+            )  # (num_T, num_consample)
+            target_weights = target_similarities / np.sum(
+                target_similarities, axis=0, keepdims=True
+            )
+            tgtsample_ixs = [
+                np.random.choice(
+                    num_T, size=num_tgtsample, replace=False, p=target_weights[:, cix]
+                ).tolist()
+                for cix in range(num_consample)
+            ]
+            source_kernel = 1.0 * RBF(length_scale=1.0)
+            source_similarities = source_kernel(
+                X_S, X_consample
+            )  # (num_T, num_consample)
+            source_weights = source_similarities / np.sum(
+                source_similarities, axis=0, keepdims=True
+            )
+            srcsample_ixs = [
+                np.random.choice(
+                    num_S, size=num_srcsample, replace=False, p=source_weights[:, cix]
+                ).tolist()
+                for cix in range(num_consample)
+            ]
+            T_torch = torch.from_numpy(T)
+            S_torch = torch.from_numpy(S)
+
+            def joint_mmd_obj(mb):
+                M = mb[0:num_feats, :]  # (num_feats, num_feats)
+                b = mb[num_feats, :]  # (num_feats,)
+
+                obj = torch.tensor(0.0)
+                for cix in range(num_consample):
+                    for tix in range(num_tgtsample):
+                        T_cur = T_torch[tgtsample_ixs[cix][tix], :]
+                        for six in range(num_srcsample):
+                            S_cur = S_torch[srcsample_ixs[cix][six], :]
+                            obj -= 2 * torch.exp(
+                                -0.5 * torch.sum((T_cur - (M @ S_cur + b)) ** 2)
+                            )
+                    for six1 in range(num_srcsample):
+                        S_cur1 = S_torch[srcsample_ixs[cix][six1], :]
+                        for six2 in range(num_srcsample):
+                            S_cur2 = S_torch[srcsample_ixs[cix][six2], :]
+                            obj += torch.exp(
+                                -0.5 * torch.sum(((M @ (S_cur1 - S_cur2)) ** 2))
+                            )
+                return obj
+
+            mb_init = torch.from_numpy(np.vstack([self.M_, self.b_]))
+            res = tm.minimize(
+                joint_mmd_obj,
+                mb_init,
+                method="l-bfgs",
+                max_iter=50,
+                disp=self.verbose,
+            )
+            mb_opt = res.x.numpy()
+            self.M_ = mb_opt[0:num_feats, :]  # (num_feats, num_feats)
+            self.b_ = mb_opt[num_feats, :]  # (num_feats,)
+            self.num_feats_ = num_feats
+            return self
 
         if self.transform_type == "joint" and num_feats > 1:
             assert self.model_type == "linear"
@@ -425,7 +518,7 @@ class ConDoAdapter:
             ]
             Est_Sigma_S = torch.from_numpy(est_Sigma_S)
 
-            if self.kld_direction == "forward":
+            if self.divergence == "forward":
 
                 def joint_forward_kl_obj(mb):
                     M = mb[0:num_feats, :]  # (num_feats, num_feats)
@@ -458,7 +551,7 @@ class ConDoAdapter:
                 self.M_ = mb_opt[0:num_feats, :]  # (num_feats, num_feats)
                 self.b_ = mb_opt[num_feats, :]  # (num_feats,)
 
-            elif self.kld_direction == "reverse":
+            elif self.divergence == "reverse":
                 # TODO: speedup via explicit gradient torchmin trick
                 # TODO: or speedup by vectorizing the for-loop
                 # TODO: simplify the logdet(M @ Sigma_S @ M) term
@@ -554,7 +647,7 @@ class ConDoAdapter:
 
             est_var_T_all = est_sigma_T_all**2
             est_var_S_all = est_sigma_S_all**2
-            if self.kld_direction == "forward":
+            if self.divergence == "forward":
                 F_0 = np.mean(
                     est_var_S_all * np.log(est_sigma_S_all / est_sigma_T_all), axis=0
                 )
@@ -613,7 +706,7 @@ class ConDoAdapter:
                         self.m_plot_ = m_plot
                         self.b_plot_ = b_plot
 
-            elif self.kld_direction == "reverse":
+            elif self.divergence == "reverse":
                 R_1 = 2 * np.mean(est_var_T_all, axis=0)
                 R_2 = np.mean(est_var_S_all, axis=0)
                 R_3 = np.mean(est_mu_S_all**2, axis=0)
@@ -669,7 +762,7 @@ class ConDoAdapter:
                         self.m_plot_ = m_plot
                         self.b_plot_ = b_plot
             else:
-                raise ValueError(f"kld_direction: {self.kld_direction}")
+                raise ValueError(f"divergence: {self.divergence}")
 
         self.num_feats_ = num_feats
 
@@ -680,6 +773,9 @@ class ConDoAdapter:
         S,
     ):
         if self.transform_type == "joint" and self.num_feats_ > 1:
+            adaptedS = (self.M_ @ S.T).T + self.b_.reshape(1, -1)
+        elif self.divergence == "mmd":
+            # TODO: implement independent mmd
             adaptedS = (self.M_ @ S.T).T + self.b_.reshape(1, -1)
         else:
             adaptedS = self.m_ * S + self.b_
