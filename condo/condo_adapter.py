@@ -41,9 +41,11 @@ def joint_linear_distr(
     Returns:
         est_mus: (num_test, num_feats)
         est_Sigma: (num_feats, num_feats)
+        predictor: sklearn model predicting D given X
     """
     num_test = Xtest.shape[0]
     num_feats = D.shape[1]
+
     oher = make_column_transformer(
         (
             OneHotEncoder(sparse=False, handle_unknown="ignore"),
@@ -65,7 +67,8 @@ def joint_linear_distr(
 
     est_Sigma = glassoer.covariance_
     est_mus = ridger.predict(Xtest)
-    return (est_mus, est_Sigma)
+    predictor = ridger
+    return (est_mus, est_Sigma, predictor)
 
 
 def independent_linear_distr(
@@ -83,10 +86,11 @@ def independent_linear_distr(
     Returns:
         est_mus: (num_test, num_feats)
         est_sigmas: (num_test, num_feats)
+        predictor: sklearn model predicting D given X
     """
     num_test = Xtest.shape[0]
     num_feats = D.shape[1]
-    """
+
     oher = make_column_transformer(
         (
             OneHotEncoder(sparse=False, handle_unknown="ignore"),
@@ -94,13 +98,10 @@ def independent_linear_distr(
         ),
         remainder="passthrough",
     )
-    XandXtest = np.vstack([X, Xtest])
-    oher.fit(XandXtest)
-    encodedX = oher.transform(X)
-    encodedXtest = oher.transform(Xtest)
-    """
-    encodedX = X
-    encodedXtest = Xtest
+    XandXtest_df = pd.DataFrame(np.vstack([X, Xtest]))
+    oher.fit(XandXtest_df)
+    encodedX = oher.transform(pd.DataFrame(X))
+    encodedXtest = oher.transform(pd.DataFrame(Xtest))
 
     ridger = RidgeCV(alpha_per_target=True)
     ridger.fit(encodedX, D)
@@ -111,8 +112,9 @@ def independent_linear_distr(
     residD = predD - D
     est_sigmas = np.std(residD, axis=0, keepdims=True)
     est_sigmas = np.tile(est_sigmas, (num_test, 1))
+    predictor = ridger
 
-    return (est_mus, est_sigmas)
+    return (est_mus, est_sigmas, predictor)
 
 
 def heteroscedastic_gp_distr(
@@ -133,6 +135,7 @@ def heteroscedastic_gp_distr(
     Returns:
         est_mus: (num_test, num_feats)
         est_sigmas: (num_test, num_feats)
+        predictor: sklearn model predicting D given X
     """
     num_test = Xtest.shape[0]
     num_feats = D.shape[1]
@@ -187,7 +190,7 @@ def heteroscedastic_gp_distr(
         est_mus[:, fix] = est_mu
         est_sigmas[:, fix] = est_sigma
 
-    return (est_mus, est_sigmas)
+    return (est_mus, est_sigmas, gper)
 
 
 def homoscedastic_gp_distr(
@@ -264,7 +267,7 @@ def homoscedastic_gp_distr(
         est_mus[:, fix] = est_mu
         est_sigmas[:, fix] = est_sigma
 
-    return (est_mus, est_sigmas)
+    return (est_mus, est_sigmas, gper)
 
 
 class ConDoAdapter:
@@ -400,7 +403,7 @@ class ConDoAdapter:
             self.m_ = None
             self.M_ = np.eye(num_feats, num_feats)
             self.b_ = np.zeros((1, num_feats))
-            (est_mu_T_all, est_Sigma_T) = joint_linear_distr(
+            (est_mu_T_all, est_Sigma_T, predictor_T) = joint_linear_distr(
                 D=T,
                 X=X_T,
                 Xtest=Xtest,
@@ -411,7 +414,7 @@ class ConDoAdapter:
             ]
             Est_Sigma_T = torch.from_numpy(est_Sigma_T)
             Est_inv_Sigma_T = torch.from_numpy(np.linalg.inv(est_Sigma_T))
-            (est_mu_S_all, est_Sigma_S) = joint_linear_distr(
+            (est_mu_S_all, est_Sigma_S, predictor_S) = joint_linear_distr(
                 D=S,
                 X=X_S,
                 Xtest=Xtest,
@@ -436,6 +439,7 @@ class ConDoAdapter:
                         Est_Sigma_T,
                         MSMTinv,
                     )
+                    # obj += num_test * 1e-8 * torch.sum(M ** 2)
                     for n in range(num_test):
                         # err_n has size (num_feats, 1)
                         err_n = M @ Est_mu_S_all[n] + b - Est_mu_T_all[n]
@@ -468,6 +472,8 @@ class ConDoAdapter:
                         Est_inv_Sigma_T @ M,
                         Est_Sigma_S @ M.T,
                     )
+                    # obj += num_test * 1e-8 * torch.sum(M ** 2)
+                    # obj += -10 * torch.sum(torch.clamp(M, min=float('-inf'), max=0))
                     for n in range(num_test):
                         # err_n has size (num_feats, 1)
                         err_n = M @ Est_mu_S_all[n] + b - Est_mu_T_all[n]
@@ -482,6 +488,18 @@ class ConDoAdapter:
                     max_iter=50,
                     disp=self.verbose,
                 )
+                """
+                res = tm.minimize_constr(
+                    joint_reverse_kl_obj,
+                    mb_init, 
+                    max_iter=50,
+                    constr=dict(
+                        fun=lambda x: x[0:num_feats,:].min(),
+                        lb=0, ub=float('inf')
+                    ),
+                    disp=1
+                )
+                """
                 mb_opt = res.x.numpy()
                 self.M_ = mb_opt[0:num_feats, :]  # (num_feats, num_feats)
                 self.b_ = mb_opt[num_feats, :]  # (num_feats,)
@@ -491,27 +509,27 @@ class ConDoAdapter:
             self.m_ = np.zeros(num_feats)
             self.b_ = np.zeros(num_feats)
             if self.model_type == "linear":
-                (est_mu_T_all, est_sigma_T_all) = independent_linear_distr(
+                (est_mu_T_all, est_sigma_T_all, predictor_T) = independent_linear_distr(
                     D=T,
                     X=X_T,
                     Xtest=Xtest,
                     verbose=self.verbose,
                 )
-                (est_mu_S_all, est_sigma_S_all) = independent_linear_distr(
+                (est_mu_S_all, est_sigma_S_all, predictor_S) = independent_linear_distr(
                     D=S,
                     X=X_S,
                     Xtest=Xtest,
                     verbose=self.verbose,
                 )
             elif self.model_type == "homoscedastic-gp":
-                (est_mu_T_all, est_sigma_T_all) = homoscedastic_gp_distr(
+                (est_mu_T_all, est_sigma_T_all, predictor_T) = homoscedastic_gp_distr(
                     D=T,
                     X=X_T,
                     Xtest=Xtest,
                     multi_confounder_kernel=self.multi_confounder_kernel,
                     verbose=self.verbose,
                 )
-                (est_mu_S_all, est_sigma_S_all) = homoscedastic_gp_distr(
+                (est_mu_S_all, est_sigma_S_all, predictor_S) = homoscedastic_gp_distr(
                     D=S,
                     X=X_S,
                     Xtest=Xtest,
@@ -519,14 +537,14 @@ class ConDoAdapter:
                     verbose=self.verbose,
                 )
             elif self.model_type == "heteroscedastic-gp":
-                (est_mu_T_all, est_sigma_T_all) = heteroscedastic_gp_distr(
+                (est_mu_T_all, est_sigma_T_all, predictor_T) = heteroscedastic_gp_distr(
                     D=T,
                     X=X_T,
                     Xtest=Xtest,
                     multi_confounder_kernel=self.multi_confounder_kernel,
                     verbose=self.verbose,
                 )
-                (est_mu_S_all, est_sigma_S_all) = heteroscedastic_gp_distr(
+                (est_mu_S_all, est_sigma_S_all, predictor_S) = heteroscedastic_gp_distr(
                     D=S,
                     X=X_S,
                     Xtest=Xtest,
