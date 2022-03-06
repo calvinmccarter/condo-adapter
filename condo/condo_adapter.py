@@ -415,66 +415,135 @@ class ConDoAdapter:
             self.m_ = None
             self.M_ = np.eye(num_feats, num_feats)
             self.b_ = np.zeros((1, num_feats))
-            num_consample = min(10, num_test)
-            num_srcsample = min(20, num_S)
-            num_tgtsample = min(20, num_T)
-            consample_ixs = np.random.choice(
-                num_test, size=num_consample, replace=False
-            )
-            X_consample = Xtest[consample_ixs, :]
             confounder_is_cat = (Xtest.dtype == bool) or not np.issubdtype(
                 Xtest.dtype, np.number
             )
-            assert not confounder_is_cat
-            target_kernel = 1.0 * RBF(length_scale=1.0)
-            target_similarities = target_kernel(
-                X_T, X_consample
-            )  # (num_T, num_consample)
-            target_weights = target_similarities / np.sum(
-                target_similarities, axis=0, keepdims=True
-            )
-            tgtsample_ixs = [
+            # TODO: handle categorical confounder
+            # TODO: choose intelligent length_scale for continuous
+            # TODO: handle multiple confounders
+            assert num_confounders == 1
+            if confounder_is_cat:
+                target_kernel = CatKernel()
+                source_kernel = CatKernel()
+                (XtestUVals, XtestUCounts) = np.unique(
+                    Xtest, axis=0, return_counts=True
+                )
+                num_testu = XtestUVals.shape[0]
+            else:
+                target_kernel = 1.0 * RBF(length_scale=1.0)
+                source_kernel = 1.0 * RBF(length_scale=1.0)
+                XtestUVals = Xtest
+                num_testu = num_test
+            num_sample = min(num_S, num_T)
+            target_weights = target_kernel(X_T, XtestUVals)  # (num_T, num_testu)
+            target_weights = target_weights / np.sum(
+                target_weights, axis=0, keepdims=True
+            )  # each column sums to 1
+            T_ixs = [
                 np.random.choice(
-                    num_T, size=num_tgtsample, replace=False, p=target_weights[:, cix]
+                    num_T, size=num_sample, replace=True, p=target_weights[:, cix]
                 ).tolist()
-                for cix in range(num_consample)
+                for cix in range(num_testu)
             ]
-            source_kernel = 1.0 * RBF(length_scale=1.0)
-            source_similarities = source_kernel(
-                X_S, X_consample
-            )  # (num_T, num_consample)
-            source_weights = source_similarities / np.sum(
-                source_similarities, axis=0, keepdims=True
+            source_weights = source_kernel(X_S, XtestUVals)  # (num_S, num_testu)
+            source_weights = source_weights / np.sum(
+                source_weights, axis=0, keepdims=True
             )
-            srcsample_ixs = [
+            S_ixs = [
                 np.random.choice(
-                    num_S, size=num_srcsample, replace=False, p=source_weights[:, cix]
+                    num_S, size=num_sample, replace=True, p=source_weights[:, cix]
                 ).tolist()
-                for cix in range(num_consample)
+                for cix in range(num_testu)
             ]
-            T_torch = torch.from_numpy(T)
-            S_torch = torch.from_numpy(S)
+            # T_weights = torch.from_numpy(target_weights)
+            # S_weights = torch.from_numpy(source_weights)
+            T_weights = target_weights
+            S_weights = source_weights
+            T_data = torch.from_numpy(T)
+            S_data = torch.from_numpy(S)
 
             def joint_mmd_obj(mb):
+                ls = 1.0
                 M = mb[0:num_feats, :]  # (num_feats, num_feats)
-                b = mb[num_feats, :]  # (num_feats,)
-
+                b = mb[[num_feats], :].T  # (num_feats, 1)
+                # b = mb[num_feats, :]  # (num_feats,)
                 obj = torch.tensor(0.0)
-                for cix in range(num_consample):
-                    for tix in range(num_tgtsample):
-                        T_cur = T_torch[tgtsample_ixs[cix][tix], :]
-                        for six in range(num_srcsample):
-                            S_cur = S_torch[srcsample_ixs[cix][six], :]
-                            obj -= 2 * torch.exp(
-                                -0.5 * torch.sum((T_cur - (M @ S_cur + b)) ** 2)
+
+                """
+                adaptedS = (M @ S_data.T + b).T
+                factor_T_x_Tt = (1/(-2*ls)) * (T_data @ T_data.T)
+                factor_T_x_St = (-2/(-2*ls)) * (T_data @ adaptedS.T)
+                factor_S_x_St = (1/(-2*ls)) * (adaptedS @ adaptedS.T)
+                S_x_St = adaptedS @ adaptedS.T
+                factor_S1_x_S1t = (1/(-2*ls)) * (S_x_St)
+                factor_S1_x_S2t = (-2/(-2*ls)) * (S_x_St)
+                factor_S2_x_S2t = (1/(-2*ls)) * (S_x_St)
+                for cix in range(num_test):
+                    # third term in eq:mmd-exp is itself decomposed since an RBF
+                    for tix in range(num_T):
+                        for six in range(num_S):
+                            obj += -2 * (
+                                torch.exp(
+                                    factor_T_x_Tt[tix, tix] 
+                                    + factor_T_x_St[tix, six]
+                                    + factor_S_x_St[six, six] 
+                                ) * T_weights[tix, cix] * S_weights[six, cix]
                             )
-                    for six1 in range(num_srcsample):
-                        S_cur1 = S_torch[srcsample_ixs[cix][six1], :]
-                        for six2 in range(num_srcsample):
-                            S_cur2 = S_torch[srcsample_ixs[cix][six2], :]
-                            obj += torch.exp(
-                                -0.5 * torch.sum(((M @ (S_cur1 - S_cur2)) ** 2))
+
+                    for six1 in range(num_S):
+                        for six2 in range(num_S):
+                            obj += (
+                                torch.exp(
+                                    factor_S1_x_S1t[six1, six1] 
+                                    + factor_S1_x_S2t[six1, six2]
+                                    + factor_S2_x_S2t[six2, six2] 
+                                ) * S_weights[six1, cix] * S_weights[six2, cix]
                             )
+                        # FIXME- normalize full weight matrix, not just weight vectors
+                """
+
+                adaptedS = (M @ S_data.T + b).T
+                for cix in range(num_testu):
+                    for tix in range(num_sample):
+                        T_cur = T_data[T_ixs[cix][tix], :]
+                        for six in range(num_sample):
+                            S_cur = adaptedS[S_ixs[cix][six], :]
+                            obj -= (
+                                2
+                                * XtestUCounts[cix]
+                                * torch.exp(-0.5 * torch.sum((T_cur - S_cur) ** 2))
+                            )
+                    for six1 in range(num_sample):
+                        S_cur1 = adaptedS[S_ixs[cix][six1], :]
+                        for six2 in range(num_sample):
+                            S_cur2 = adaptedS[S_ixs[cix][six2], :]
+                            obj += XtestUCounts[cix] * torch.exp(
+                                -0.5 * torch.sum(((S_cur1 - S_cur2) ** 2))
+                            )
+                obj += -1.0 * torch.logdet(M)
+                """
+                for cix in range(num_test):
+                    for tix in range(num_T):
+                        T_cur = T_data[tix, :]
+                        for six in range(num_S):
+                            #S_cur = S_data[six, :]
+                            S_cur = adaptedS[six, :]
+                            obj -= (2 * T_weights[tix,cix] * S_weights[six,cix]) * torch.exp(
+                                -0.5 * torch.sum((T_cur - S_cur) ** 2)
+                                #-0.5 * torch.sum((T_cur - (M @ S_cur + b)) ** 2)
+                            )
+                    for six1 in range(num_S):
+                        #S_cur1 = S_data[six1, :]
+                        S_cur1 = adaptedS[six1, :]
+                        for six2 in range(num_S):
+                            #S_cur2 = S_data[six2, :]
+                            S_cur2 = adaptedS[six2, :]
+                            obj += (S_weights[six1,cix] * S_weights[six2,cix]) * torch.exp(
+                                -0.5 * torch.sum(((S_cur1 - S_cur2) ** 2))
+                                #-0.5 * torch.sum(((M @ (S_cur1 - S_cur2)) ** 2))
+                            )
+                """
+
                 return obj
 
             mb_init = torch.from_numpy(np.vstack([self.M_, self.b_]))
@@ -776,7 +845,9 @@ class ConDoAdapter:
             adaptedS = (self.M_ @ S.T).T + self.b_.reshape(1, -1)
         elif self.divergence == "mmd":
             # TODO: implement independent mmd
+            # self.b_.reshape(1, -1) has shape (1, num_feats)
             adaptedS = (self.M_ @ S.T).T + self.b_.reshape(1, -1)
+            # same as S @ self.M_.T + self.b_.reshape(1, -1)
         else:
             adaptedS = self.m_ * S + self.b_
         return adaptedS
