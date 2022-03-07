@@ -26,6 +26,106 @@ from condo.cat_kernels import (
 )
 
 
+def run_conditional_mmd(
+    S,
+    T,
+    X_S,
+    X_T,
+    Xtest,
+    batch_size: int = 16,
+    verbose: Union[bool, int] = 0,
+):
+    num_S = S.shape[0]
+    num_T = T.shape[0]
+    num_test = Xtest.shape[0]
+    num_feats = S.shape[1]
+    num_confounders = X_S.shape[1]
+    M_ = np.eye(num_feats, num_feats)
+    b_ = np.zeros((1, num_feats))
+    num_consample = num_test
+    num_srcsample = batch_size
+    num_tgtsample = batch_size
+    consample_ixs = np.random.choice(num_test, size=num_consample, replace=False)
+    # switching replace=True from replace=False caused the problem
+    X_consample = Xtest[consample_ixs, :]
+    confounder_is_cat = (Xtest.dtype == bool) or not np.issubdtype(
+        Xtest.dtype, np.number
+    )
+    assert num_confounders == 1
+    """
+    if confounder_is_cat:
+        target_kernel = CatKernel()
+        source_kernel = CatKernel()
+        (XtestUVals, XtestUCounts) = np.unique(
+            Xtest, axis=0, return_counts=True
+        )
+        num_testu = XtestUVals.shape[0]
+    else:
+        target_kernel = 1.0 * RBF(length_scale=1.0)
+        source_kernel = 1.0 * RBF(length_scale=1.0)
+        XtestUVals = Xtest
+        num_testu = num_test
+    """
+
+    target_kernel = 1.0 * RBF(length_scale=1.0)
+    target_similarities = target_kernel(X_T, X_consample)  # (num_T, num_consample)
+    target_weights = target_similarities / np.sum(
+        target_similarities, axis=0, keepdims=True
+    )
+    tgtsample_ixs = [
+        np.random.choice(
+            num_T, size=num_tgtsample, replace=True, p=target_weights[:, cix]
+        ).tolist()
+        for cix in range(num_consample)
+    ]
+    source_kernel = 1.0 * RBF(length_scale=1.0)
+    source_similarities = source_kernel(X_S, X_consample)  # (num_T, num_consample)
+    source_weights = source_similarities / np.sum(
+        source_similarities, axis=0, keepdims=True
+    )
+    srcsample_ixs = [
+        np.random.choice(
+            num_S, size=num_srcsample, replace=True, p=source_weights[:, cix]
+        ).tolist()
+        for cix in range(num_consample)
+    ]
+    T_torch = torch.from_numpy(T)
+    S_torch = torch.from_numpy(S)
+
+    def joint_mmd_obj(mb):
+        M = mb[0:num_feats, :]  # (num_feats, num_feats)
+        b = mb[num_feats, :]  # (num_feats,)
+
+        obj = torch.tensor(0.0)
+        for cix in range(num_consample):
+            for tix in range(num_tgtsample):
+                T_cur = T_torch[tgtsample_ixs[cix][tix], :]
+                for six in range(num_srcsample):
+                    S_cur = S_torch[srcsample_ixs[cix][six], :]
+                    obj -= 2 * torch.exp(
+                        -0.5 * torch.sum((T_cur - (M @ S_cur + b)) ** 2)
+                    )
+            for six1 in range(num_srcsample):
+                S_cur1 = S_torch[srcsample_ixs[cix][six1], :]
+                for six2 in range(num_srcsample):
+                    S_cur2 = S_torch[srcsample_ixs[cix][six2], :]
+                    obj += torch.exp(-0.5 * torch.sum(((M @ (S_cur1 - S_cur2)) ** 2)))
+        return obj
+
+    mb_init = torch.from_numpy(np.vstack([M_, b_]))
+    res = tm.minimize(
+        joint_mmd_obj,
+        mb_init,
+        method="l-bfgs",
+        max_iter=50,
+        disp=verbose,
+    )
+    mb_opt = res.x.numpy()
+    M_ = mb_opt[0:num_feats, :]  # (num_feats, num_feats)
+    b_ = mb_opt[num_feats, :]  # (num_feats,)
+    return (M_, b_)
+
+
 def joint_linear_distr(
     D: np.ndarray,
     X: np.ndarray,
@@ -412,6 +512,17 @@ class ConDoAdapter:
             raise ValueError(f"sampling: {self.sampling}")
         num_test = Xtest.shape[0]
         if self.divergence == "mmd":
+            self.M_, self.b_ = run_conditional_mmd(
+                S=S,
+                T=T,
+                X_S=X_S,
+                X_T=X_T,
+                Xtest=Xtest,
+                verbose=self.verbose,
+            )
+            self.num_feats_ = num_feats
+            return self
+
             self.m_ = None
             self.M_ = np.eye(num_feats, num_feats)
             self.b_ = np.zeros((1, num_feats))
