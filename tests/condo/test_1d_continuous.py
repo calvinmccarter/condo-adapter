@@ -13,10 +13,10 @@ from condo import ConDoAdapter
     ["linear", "homoscedastic-gp", "heteroscedastic-gp"],
 )
 @pytest.mark.parametrize(
-    "kld_direction",
+    "divergence",
     ["forward", "reverse"],
 )
-def test_1d_continuous(sampling, transform_type, model_type, kld_direction):
+def test_1d_continuous(sampling, transform_type, model_type, divergence):
     """Test 1d variable with 1d continuous confounder."""
 
     np.random.seed(0)
@@ -53,7 +53,7 @@ def test_1d_continuous(sampling, transform_type, model_type, kld_direction):
         sampling=sampling,
         transform_type=transform_type,
         model_type=model_type,
-        kld_direction=kld_direction,
+        divergence=divergence,
     )
 
     cder.fit(Sbatch, T, X_S, X_T)
