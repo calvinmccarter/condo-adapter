@@ -64,29 +64,84 @@ def run_conditional_mmd(
         Xtestu = Xtest
         num_testu = num_test
         Xtestu_counts = np.ones(num_testu)
-
     target_similarities = target_kernel(X_T, Xtestu)  # (num_T, num_testu)
     target_weights = target_similarities / np.sum(
         target_similarities, axis=0, keepdims=True
     )
+    source_similarities = source_kernel(X_S, Xtestu)  # (num_T, num_testu)
+    source_weights = source_similarities / np.sum(
+        source_similarities, axis=0, keepdims=True
+    )
+    T_torch = torch.from_numpy(T)
+    S_torch = torch.from_numpy(S)
+
+    M = torch.eye(num_feats, num_feats, dtype=torch.float64, requires_grad=True)
+    b = torch.ones(num_feats, dtype=torch.float64, requires_grad=True)
+    alpha = 0.1
+    beta = 0.9
+    batches_per_epoch = round(num_S * num_T / (num_srcsample * num_tgtsample))
+    terms_per_batch = num_testu * num_tgtsample * num_tgtsample
+    recip = 1.0 / terms_per_batch
+    for epoch in range(5):
+        Mz = torch.zeros(num_feats, num_feats)
+        bz = torch.zeros(
+            num_feats,
+        )
+        for batch in range(batches_per_epoch):
+            tgtsample_ixs = [
+                np.random.choice(
+                    num_T, size=num_tgtsample, replace=True, p=target_weights[:, cix]
+                ).tolist()
+                for cix in range(num_testu)
+            ]
+            srcsample_ixs = [
+                np.random.choice(
+                    num_S, size=num_srcsample, replace=True, p=source_weights[:, cix]
+                ).tolist()
+                for cix in range(num_testu)
+            ]
+            obj = torch.tensor(0.0, requires_grad=True)
+            for cix in range(num_testu):
+                for tix in range(num_tgtsample):
+                    T_cur = T_torch[tgtsample_ixs[cix][tix], :]
+                    for six in range(num_srcsample):
+                        S_cur = S_torch[srcsample_ixs[cix][six], :]
+                        obj = obj - 2 * recip * torch.exp(
+                            -0.5 * torch.sum((T_cur - (M @ S_cur + b)) ** 2)
+                        )
+                for six1 in range(num_srcsample):
+                    S_cur1 = S_torch[srcsample_ixs[cix][six1], :]
+                    for six2 in range(num_srcsample):
+                        S_cur2 = S_torch[srcsample_ixs[cix][six2], :]
+                        obj = obj + recip * torch.exp(
+                            -0.5 * torch.sum(((M @ (S_cur1 - S_cur2)) ** 2))
+                        )
+            obj.backward()
+            with torch.no_grad():
+                Mz = beta * Mz + M.grad
+                bz = beta * bz + b.grad
+                M -= alpha * Mz
+                b -= alpha * bz
+            M.grad.zero_()
+            b.grad.zero_()
+            print(f"epoch:{epoch} batch:{batch} obj:{obj}")
+
+    M_ = M.detach().numpy()
+    b_ = b.detach().numpy()
+    return (M_, b_)
+
     tgtsample_ixs = [
         np.random.choice(
             num_T, size=num_tgtsample, replace=True, p=target_weights[:, cix]
         ).tolist()
         for cix in range(num_testu)
     ]
-    source_similarities = source_kernel(X_S, Xtestu)  # (num_T, num_testu)
-    source_weights = source_similarities / np.sum(
-        source_similarities, axis=0, keepdims=True
-    )
     srcsample_ixs = [
         np.random.choice(
             num_S, size=num_srcsample, replace=True, p=source_weights[:, cix]
         ).tolist()
         for cix in range(num_testu)
     ]
-    T_torch = torch.from_numpy(T)
-    S_torch = torch.from_numpy(S)
 
     def joint_mmd_obj(mb):
         M = mb[0:num_feats, :]  # (num_feats, num_feats)
