@@ -42,33 +42,30 @@ def run_conditional_mmd(
     num_confounders = X_S.shape[1]
     M_ = np.eye(num_feats, num_feats)
     b_ = np.zeros((1, num_feats))
-    num_consample = num_test
     num_srcsample = batch_size
     num_tgtsample = batch_size
-    consample_ixs = np.random.choice(num_test, size=num_consample, replace=False)
-    # switching replace=True from replace=False caused the problem
-    X_consample = Xtest[consample_ixs, :]
     confounder_is_cat = (Xtest.dtype == bool) or not np.issubdtype(
         Xtest.dtype, np.number
     )
     assert num_confounders == 1
-    """
     if confounder_is_cat:
         target_kernel = CatKernel()
         source_kernel = CatKernel()
-        (XtestUVals, XtestUCounts) = np.unique(
-            Xtest, axis=0, return_counts=True
-        )
-        num_testu = XtestUVals.shape[0]
+        (Xtestu, Xtestu_counts) = np.unique(Xtest, axis=0, return_counts=True)
+        num_testu = Xtestu.shape[0]
+        """
+        Xtestu = Xtest
+        num_testu = num_test
+        Xtestu_counts = np.ones(num_testu)
+        """
     else:
         target_kernel = 1.0 * RBF(length_scale=1.0)
         source_kernel = 1.0 * RBF(length_scale=1.0)
-        XtestUVals = Xtest
+        Xtestu = Xtest
         num_testu = num_test
-    """
+        Xtestu_counts = np.ones(num_testu)
 
-    target_kernel = 1.0 * RBF(length_scale=1.0)
-    target_similarities = target_kernel(X_T, X_consample)  # (num_T, num_consample)
+    target_similarities = target_kernel(X_T, Xtestu)  # (num_T, num_testu)
     target_weights = target_similarities / np.sum(
         target_similarities, axis=0, keepdims=True
     )
@@ -76,10 +73,9 @@ def run_conditional_mmd(
         np.random.choice(
             num_T, size=num_tgtsample, replace=True, p=target_weights[:, cix]
         ).tolist()
-        for cix in range(num_consample)
+        for cix in range(num_testu)
     ]
-    source_kernel = 1.0 * RBF(length_scale=1.0)
-    source_similarities = source_kernel(X_S, X_consample)  # (num_T, num_consample)
+    source_similarities = source_kernel(X_S, Xtestu)  # (num_T, num_testu)
     source_weights = source_similarities / np.sum(
         source_similarities, axis=0, keepdims=True
     )
@@ -87,7 +83,7 @@ def run_conditional_mmd(
         np.random.choice(
             num_S, size=num_srcsample, replace=True, p=source_weights[:, cix]
         ).tolist()
-        for cix in range(num_consample)
+        for cix in range(num_testu)
     ]
     T_torch = torch.from_numpy(T)
     S_torch = torch.from_numpy(S)
@@ -97,7 +93,7 @@ def run_conditional_mmd(
         b = mb[num_feats, :]  # (num_feats,)
 
         obj = torch.tensor(0.0)
-        for cix in range(num_consample):
+        for cix in range(num_testu):
             for tix in range(num_tgtsample):
                 T_cur = T_torch[tgtsample_ixs[cix][tix], :]
                 for six in range(num_srcsample):
@@ -536,17 +532,15 @@ class ConDoAdapter:
             if confounder_is_cat:
                 target_kernel = CatKernel()
                 source_kernel = CatKernel()
-                (XtestUVals, XtestUCounts) = np.unique(
-                    Xtest, axis=0, return_counts=True
-                )
-                num_testu = XtestUVals.shape[0]
+                (Xtestu, XtestUCounts) = np.unique(Xtest, axis=0, return_counts=True)
+                num_testu = Xtestu.shape[0]
             else:
                 target_kernel = 1.0 * RBF(length_scale=1.0)
                 source_kernel = 1.0 * RBF(length_scale=1.0)
-                XtestUVals = Xtest
+                Xtestu = Xtest
                 num_testu = num_test
             num_sample = min(num_S, num_T)
-            target_weights = target_kernel(X_T, XtestUVals)  # (num_T, num_testu)
+            target_weights = target_kernel(X_T, Xtestu)  # (num_T, num_testu)
             target_weights = target_weights / np.sum(
                 target_weights, axis=0, keepdims=True
             )  # each column sums to 1
@@ -556,7 +550,7 @@ class ConDoAdapter:
                 ).tolist()
                 for cix in range(num_testu)
             ]
-            source_weights = source_kernel(X_S, XtestUVals)  # (num_S, num_testu)
+            source_weights = source_kernel(X_S, Xtestu)  # (num_S, num_testu)
             source_weights = source_weights / np.sum(
                 source_weights, axis=0, keepdims=True
             )
