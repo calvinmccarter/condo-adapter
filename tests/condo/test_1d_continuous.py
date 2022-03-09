@@ -6,7 +6,7 @@ from condo import ConDoAdapter
 @pytest.mark.parametrize("sampling", ["proportional", "target"])
 @pytest.mark.parametrize(
     "transform_type",
-    ["independent"],
+    ["location-scale"],
 )
 @pytest.mark.parametrize(
     "model_type",

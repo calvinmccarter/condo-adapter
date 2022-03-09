@@ -1,3 +1,4 @@
+from copy import deepcopy
 from typing import Union
 
 import numpy as np
@@ -32,16 +33,30 @@ def run_conditional_mmd(
     X_S,
     X_T,
     Xtest,
-    batch_size: int = 16,
+    transform_type,
     verbose: Union[bool, int] = 0,
+    epochs: int = 10,
+    batch_size: int = 16,
     alpha: float = 0.1,
     beta: float = 0.9,
 ):
     """
     Args:
+        transform_type: Whether to jointly transform all features ("affine"),
+            or to transform each feature independently ("location-scale").
+            Modeling the joint distribution is slower and allows each
+            adapted feature to be a function of all other features,
+            rather than purely based on that particular feature
+            observation.
+
+        epochs: number of times to pass through all observed confounder values.
+
         batch_size: number of samples to draw from S and T per confounder value.
             kernel matrix will be of size (batch_size, batch_size).
+            The number of batches per epoch is num_S*num_T / (batch_size ** 2).
+
         alpha: gradient descent step size
+
         beta: Nesterov momentum
 
     Returns:
@@ -69,9 +84,8 @@ def run_conditional_mmd(
         (Xtestu, Xtestu_counts) = np.unique(Xtest, axis=0, return_counts=True)
         num_testu = Xtestu.shape[0]
     else:
-        # TODO: choose intelligent length_scale for continuous
-        target_kernel = 1.0 * RBF(length_scale=1.0)
-        source_kernel = 1.0 * RBF(length_scale=1.0)
+        target_kernel = 1.0 * RBF(length_scale=np.std(X_S))
+        source_kernel = 1.0 * RBF(length_scale=np.std(X_T))
         Xtestu = Xtest
         num_testu = num_test
         Xtestu_counts = np.ones(num_testu)
@@ -86,18 +100,22 @@ def run_conditional_mmd(
     T_torch = torch.from_numpy(T)
     S_torch = torch.from_numpy(S)
 
-    M = torch.eye(num_feats, num_feats, dtype=torch.float64, requires_grad=True)
-    b = torch.ones(num_feats, dtype=torch.float64, requires_grad=True)
-    batches_per_epoch = round(num_S * num_T / (num_srcsample * num_tgtsample))
+    if transform_type == "affine":
+        M = torch.eye(num_feats, num_feats, dtype=torch.float64, requires_grad=True)
+    elif transform_type == "location-scale":
+        M = torch.ones(num_feats, dtype=torch.float64, requires_grad=True)
+    b = torch.zeros(num_feats, dtype=torch.float64, requires_grad=True)
+    batches = round(num_S * num_T / (num_srcsample * num_tgtsample))
     terms_per_batch = num_testu * num_tgtsample * num_tgtsample
     recip = 1.0 / terms_per_batch
-    for epoch in range(5):
-        Mz = torch.zeros(num_feats, num_feats)
-        bz = torch.zeros(
-            num_feats,
-        )
-        objs = np.zeros(batches_per_epoch)
-        for batch in range(batches_per_epoch):
+    for epoch in range(epochs):
+        if transform_type == "affine":
+            Mz = torch.zeros(num_feats, num_feats)
+        elif transform_type == "location-scale":
+            Mz = torch.zeros(num_feats)
+        bz = torch.zeros(num_feats)
+        objs = np.zeros(batches)
+        for batch in range(batches):
             tgtsample_ixs = [
                 np.random.choice(
                     num_T, size=num_tgtsample, replace=True, p=target_weights[:, cix]
@@ -111,21 +129,39 @@ def run_conditional_mmd(
                 for cix in range(num_testu)
             ]
             obj = torch.tensor(0.0, requires_grad=True)
-            for cix in range(num_testu):
-                for tix in range(num_tgtsample):
-                    T_cur = T_torch[tgtsample_ixs[cix][tix], :]
-                    for six in range(num_srcsample):
-                        S_cur = S_torch[srcsample_ixs[cix][six], :]
-                        obj = obj - 2 * recip * torch.exp(
-                            -0.5 * torch.sum((T_cur - (M @ S_cur + b)) ** 2)
-                        )
-                for six1 in range(num_srcsample):
-                    S_cur1 = S_torch[srcsample_ixs[cix][six1], :]
-                    for six2 in range(num_srcsample):
-                        S_cur2 = S_torch[srcsample_ixs[cix][six2], :]
-                        obj = obj + recip * torch.exp(
-                            -0.5 * torch.sum(((M @ (S_cur1 - S_cur2)) ** 2))
-                        )
+            if transform_type == "affine":
+                for cix in range(num_testu):
+                    for tix in range(num_tgtsample):
+                        T_cur = T_torch[tgtsample_ixs[cix][tix], :]
+                        for six in range(num_srcsample):
+                            S_cur = S_torch[srcsample_ixs[cix][six], :]
+                            obj = obj - 2 * recip * torch.exp(
+                                -0.5 * torch.sum((T_cur - (M @ S_cur + b)) ** 2)
+                            )
+                    for six1 in range(num_srcsample):
+                        S_cur1 = S_torch[srcsample_ixs[cix][six1], :]
+                        for six2 in range(num_srcsample):
+                            S_cur2 = S_torch[srcsample_ixs[cix][six2], :]
+                            obj = obj + recip * torch.exp(
+                                -0.5 * torch.sum(((M @ (S_cur1 - S_cur2)) ** 2))
+                            )
+            elif transform_type == "location-scale":
+                for cix in range(num_testu):
+                    for tix in range(num_tgtsample):
+                        T_cur = T_torch[tgtsample_ixs[cix][tix], :]
+                        for six in range(num_srcsample):
+                            S_cur = S_torch[srcsample_ixs[cix][six], :]
+                            obj = obj - 2 * recip * torch.exp(
+                                -0.5 * torch.sum((T_cur - (M * S_cur + b)) ** 2)
+                            )
+                    for six1 in range(num_srcsample):
+                        S_cur1 = S_torch[srcsample_ixs[cix][six1], :]
+                        for six2 in range(num_srcsample):
+                            S_cur2 = S_torch[srcsample_ixs[cix][six2], :]
+                            obj = obj + recip * torch.exp(
+                                -0.5 * torch.sum(((M * (S_cur1 - S_cur2)) ** 2))
+                            )
+
             obj.backward()
             with torch.no_grad():
                 Mz = beta * Mz + M.grad
@@ -135,12 +171,16 @@ def run_conditional_mmd(
             M.grad.zero_()
             b.grad.zero_()
             if verbose >= 2:
-                print(f"epoch:{epoch} batch:{batch} obj:{obj}")
+                print(f"epoch:{epoch}/{epochs} batch:{batch}/{batches} obj:{obj:.5f}")
             objs[batch] = obj.detach().numpy()
         if verbose >= 1:
-            print(f"epoch:{epoch} first:{objs[0]} last:{objs[-1]} mean:{np.mean(objs)}")
+            print(
+                f"epoch:{epoch} {objs[0]:.5f}->{objs[-1]:.5f} avg:{np.mean(objs):.5f}"
+            )
 
     M_ = M.detach().numpy()
+    if transform_type == "location-scale":
+        M_ = np.diag(M_)
     b_ = b.detach().numpy()
     return (M_, b_)
 
@@ -344,7 +384,6 @@ def homoscedastic_gp_distr(
     est_sigmas = np.zeros((num_test, num_feats))
     for fix in range(num_feats):
         if confounder_is_cat:
-            # TODO: not sure about normalize_y
             kernel = CatKernel()
             noise_dict = dict(
                 [(catname, np.var(D[:, fix])) for catname in list(set(list(X[:, 0])))]
@@ -393,10 +432,11 @@ class ConDoAdapter:
     def __init__(
         self,
         sampling: str = "source",
-        transform_type: str = "independent",
+        transform_type: str = "location-scale",
         model_type: str = "linear",
         multi_confounder_kernel: str = "sum",
-        divergence: Union[None, str] = None,
+        divergence: Union[None, str] = "mmd",
+        mmd_kwargs: dict = None,
         verbose: Union[bool, int] = 1,
         debug: bool = False,
     ):
@@ -405,8 +445,8 @@ class ConDoAdapter:
             sampling: How to sample from dataset
                 ("source", "target", "proportional", "equal").
 
-            transform_type: Whether to jointly transform all features ("joint"),
-                or to transform each feature independently ("independent").
+            transform_type: Whether to jointly transform all features ("affine"),
+                or to transform each feature independently ("location-scale").
                 Modeling the joint distribution is slower and allows each
                 adapted feature to be a function of all other features,
                 rather than purely based on that particular feature
@@ -415,15 +455,15 @@ class ConDoAdapter:
             model_type: Model for features given confounders.
                 ("linear", "homoscedastic-gp", "heteroscedastic-gp", "empirical").
 
-            divergence: Direction of the KL-divergence to minimize.
-                Valid options are None, "forward", "reverse", "mmd".
+            divergence: Distance / divergence between distributions to minimize.
+                Valid options are "mmd", "forward", "reverse".
                 The option "forward" corresponds to D_KL(target || source).
-                By default (with None), uses "reverse" if performing joint transform,
-                but uses "forward" if performing independent transform.
 
             multi_confounder_kernel: How to construct a kernel from multiple
                 confounding variables ("sum", "product"). The default
                 is "sum" because this is less likely to overfit.
+
+            mmd_kwargs: Args for MMD objective.
 
             verbose: Bool or integer that indicates the verbosity.
 
@@ -431,7 +471,7 @@ class ConDoAdapter:
         """
         if sampling not in ("source", "target", "proportional", "equal", "optimum"):
             raise ValueError(f"invalid sampling: {sampling}")
-        if transform_type not in ("joint", "independent"):
+        if transform_type not in ("affine", "location-scale"):
             raise ValueError(f"invalid transform_type: {transform_type}")
         if model_type not in (
             "linear",
@@ -454,16 +494,13 @@ class ConDoAdapter:
             raise ValueError(
                 f"incompatible (model_type, divergence): {(model_type, divergence)}"
             )
-        if divergence == "mmd" and transform_type == "independent":
-            raise NotImplementedError(
-                f"(transform_type, divergence): {(transform_type, divergence)}"
-            )
 
         self.sampling = sampling
         self.transform_type = transform_type
         self.model_type = model_type
         self.multi_confounder_kernel = multi_confounder_kernel
         self.divergence = divergence
+        self.mmd_kwargs = deepcopy(mmd_kwargs) or {}
         self.verbose = verbose
         self.debug = debug
 
@@ -476,7 +513,7 @@ class ConDoAdapter:
     ):
         """
 
-        Modifies m_, b_, M_, num_feats_
+        Modifies M_, b_,
 
         """
         num_S = S.shape[0]
@@ -537,9 +574,10 @@ class ConDoAdapter:
                 X_S=X_S,
                 X_T=X_T,
                 Xtest=Xtest,
+                transform_type=self.transform_type,
                 verbose=self.verbose,
+                **self.mmd_kwargs,
             )
-            self.num_feats_ = num_feats
             return self
 
         if self.transform_type == "joint" and num_feats > 1:
@@ -632,24 +670,12 @@ class ConDoAdapter:
                     max_iter=50,
                     disp=self.verbose,
                 )
-                """
-                res = tm.minimize_constr(
-                    joint_reverse_kl_obj,
-                    mb_init, 
-                    max_iter=50,
-                    constr=dict(
-                        fun=lambda x: x[0:num_feats,:].min(),
-                        lb=0, ub=float('inf')
-                    ),
-                    disp=1
-                )
-                """
                 mb_opt = res.x.numpy()
                 self.M_ = mb_opt[0:num_feats, :]  # (num_feats, num_feats)
                 self.b_ = mb_opt[num_feats, :]  # (num_feats,)
         else:
-            # Not joint: treating features independently
-            self.M_ = None
+            # location-scale transformation treats features independently
+            self.M_ = np.zeros((num_feats, num_feats))
             self.m_ = np.zeros(num_feats)
             self.b_ = np.zeros(num_feats)
             if self.model_type == "linear":
@@ -756,6 +782,7 @@ class ConDoAdapter:
                                     ).numpy()
                         self.m_plot_ = m_plot
                         self.b_plot_ = b_plot
+                self.M_ = np.diag(self.m_)
 
             elif self.divergence == "reverse":
                 R_1 = 2 * np.mean(est_var_T_all, axis=0)
@@ -812,10 +839,9 @@ class ConDoAdapter:
                                     ).numpy()
                         self.m_plot_ = m_plot
                         self.b_plot_ = b_plot
+                self.M_ = np.diag(self.m_)
             else:
                 raise ValueError(f"divergence: {self.divergence}")
-
-        self.num_feats_ = num_feats
 
         return self
 
@@ -823,13 +849,8 @@ class ConDoAdapter:
         self,
         S,
     ):
-        if self.transform_type == "joint" and self.num_feats_ > 1:
-            adaptedS = (self.M_ @ S.T).T + self.b_.reshape(1, -1)
-        elif self.divergence == "mmd":
-            # TODO: implement independent mmd
-            # self.b_.reshape(1, -1) has shape (1, num_feats)
-            adaptedS = (self.M_ @ S.T).T + self.b_.reshape(1, -1)
-            # same as S @ self.M_.T + self.b_.reshape(1, -1)
-        else:
-            adaptedS = self.m_ * S + self.b_
+
+        # same as adaptedS = (self.M_ @ S.T).T + self.b_.reshape(1, -1)
+        # self.b_.reshape(1, -1) has shape (1, num_feats)
+        adaptedS = S @ self.M_.T + self.b_.reshape(1, -1)
         return adaptedS
