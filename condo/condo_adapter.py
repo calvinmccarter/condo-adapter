@@ -74,8 +74,6 @@ def run_mmd_independent(
         source_kernel = CatKernel()
         (Xtestu, Xtestu_counts) = np.unique(Xtest, axis=0, return_counts=True)
         num_testu = Xtestu.shape[0]
-        # print(Xtestu_counts)
-        # print(Xtestu)
     else:
         target_kernel = 1.0 * RBF(length_scale=np.std(X_S))
         source_kernel = 1.0 * RBF(length_scale=np.std(X_T))
@@ -86,9 +84,6 @@ def run_mmd_independent(
     T_weights = target_similarities / np.sum(target_similarities, axis=0, keepdims=True)
     source_similarities = source_kernel(X_S, Xtestu)  # (num_T, num_testu)
     S_weights = source_similarities / np.sum(source_similarities, axis=0, keepdims=True)
-    # print(T_weights)
-    # print(S_weights)
-    # return
     T_torch = torch.from_numpy(T)
     S_torch = torch.from_numpy(S)
 
@@ -97,7 +92,6 @@ def run_mmd_independent(
     recip = 1.0 / terms_per_batch
     debug_tuple = None
     rbf_factor = -1 / (2 * np.var(np.vstack([T, S])))
-    print(f"rbf: {rbf_factor}")
     for fix in range(num_feats):
         M = torch.eye(1, 1, dtype=torch.float64, requires_grad=True)
         M = torch.tensor(1.0, dtype=torch.float64, requires_grad=True)
@@ -291,19 +285,29 @@ def run_mmd_affine(
             ]
             obj = torch.tensor(0.0, requires_grad=True)
             for cix in range(num_testu):
+                Tsample = T_torch[tgtsample_ixs[cix], :]
+                adaptedSsample = S_torch[srcsample_ixs[cix], :] @ M.T + b.reshape(1, -1)
+                length_scale = (
+                    torch.mean((Tsample - adaptedSsample) ** 2).detach().numpy()
+                )
+
                 for tix in range(batch_size):
                     T_cur = T_torch[tgtsample_ixs[cix][tix], :]
                     for six in range(batch_size):
                         S_cur = S_torch[srcsample_ixs[cix][six], :]
                         obj = obj - 2 * recip * torch.exp(
-                            -0.5 * torch.sum((T_cur - (M @ S_cur + b)) ** 2)
+                            -0.5
+                            / length_scale
+                            * torch.sum((T_cur - (M @ S_cur + b)) ** 2)
                         )
                 for six1 in range(batch_size):
                     S_cur1 = S_torch[srcsample_ixs[cix][six1], :]
                     for six2 in range(batch_size):
                         S_cur2 = S_torch[srcsample_ixs[cix][six2], :]
                         obj = obj + recip * torch.exp(
-                            -0.5 * torch.sum(((M @ (S_cur1 - S_cur2)) ** 2))
+                            -0.5
+                            / length_scale
+                            * torch.sum(((M @ (S_cur1 - S_cur2)) ** 2))
                         )
             obj.backward()
             with torch.no_grad():
@@ -323,6 +327,113 @@ def run_mmd_affine(
 
     M_ = M.detach().numpy()
     b_ = b.detach().numpy()
+    return (M_, b_, None)
+
+
+def run_mmd_independent_torchmin(
+    S,
+    T,
+    X_S,
+    X_T,
+    Xtest,
+    debug: bool = False,
+    verbose: Union[bool, int] = 0,
+):
+    num_S = S.shape[0]
+    num_T = T.shape[0]
+    num_test = Xtest.shape[0]
+    num_feats = S.shape[1]
+    print(num_feats)
+    num_confounders = X_S.shape[1]
+    M_ = np.eye(num_feats, num_feats)
+    b_ = np.zeros(num_feats)
+    confounder_is_cat = (Xtest.dtype == bool) or not np.issubdtype(
+        Xtest.dtype, np.number
+    )
+    assert num_confounders == 1
+    # TODO: handle multiple confounders
+
+    if confounder_is_cat:
+        target_kernel = CatKernel()
+        source_kernel = CatKernel()
+        (Xtestu, Xtestu_counts) = np.unique(Xtest, axis=0, return_counts=True)
+        num_testu = Xtestu.shape[0]
+        """
+        Xtestu = Xtest
+        num_testu = num_test
+        Xtestu_counts = np.ones(num_testu)
+        """
+    else:
+        target_kernel = 1.0 * RBF(length_scale=np.std(X_S))
+        source_kernel = 1.0 * RBF(length_scale=np.std(X_T))
+        Xtestu = Xtest
+        num_testu = num_test
+        Xtestu_counts = np.ones(num_testu)
+    target_similarities = target_kernel(X_T, Xtestu)  # (num_T, num_testu)
+    T_weights = target_similarities / np.sum(target_similarities, axis=0, keepdims=True)
+    source_similarities = source_kernel(X_S, Xtestu)  # (num_T, num_testu)
+    S_weights = source_similarities / np.sum(source_similarities, axis=0, keepdims=True)
+    T_torch = torch.from_numpy(T)
+    S_torch = torch.from_numpy(S)
+
+    for fix in range(num_feats):
+
+        def independent_mmd_obj(mb):
+            m = mb[0]
+            b = mb[1]
+
+            obj = torch.tensor(0.0)
+            foo = torch.tensor(0.0)
+            bar = torch.tensor(0.0)
+            for cix in range(num_testu):
+                cur_count = Xtestu_counts[cix]
+                for tix in range(num_T):
+                    T_cur = T_torch[tix, fix]
+                    T_cur_weight = T_weights[tix, cix]
+                    for six in range(num_S):
+                        S_cur = S_torch[six, fix]
+                        S_cur_weight = S_weights[six, cix]
+                        hey = (2 * T_cur_weight * S_cur_weight * cur_count) * torch.exp(
+                            -0.5 * torch.sum((T_cur - (m * S_cur + b)) ** 2)
+                        )
+                        obj -= hey
+                        foo -= hey
+
+                """
+                for six1 in range(num_S):
+                    S_cur1 = S_torch[six1, fix]
+                    S_cur1_weight = S_weights[six1, cix]
+                    for six2 in range(num_S):
+                        S_cur2 = S_torch[six2, fix]
+                        S_cur2_weight = S_weights[six2, cix]
+                        sqdist = ((m * (S_cur1 - S_cur2)) ** 2)
+                        before_exp = -0.5 * ((m * (S_cur1 - S_cur2)) ** 2)
+                        after_exp = torch.exp(before_exp)
+                        hoo = (S_cur1_weight * S_cur2_weight * cur_count) * torch.exp(
+                            -0.5 * ((m * (S_cur1 - S_cur2)) ** 2)
+                        )
+                        if six1 == 0 and six2 in (0, 1):
+                            print(f"m:{m}")
+                            print(f"     {six1}:{S_cur1:3f} {six2}:{S_cur2:.3f} {torch.sum(((m * (S_cur1 - S_cur2)) ** 2)):.3f}")
+                            print(f"     {torch.exp(-0.5 * torch.sum(((m * (S_cur1 - S_cur2)) ** 2))):.3f}")
+                            print(f"     sqdist:{sqdist:.3f} before_exp:{before_exp:.3f} after_exp:{after_exp:.3f}")
+                        obj += hoo
+                        bar += hoo
+                """
+            print(f"obj:{obj} foo:{foo} bar:{bar}")
+            return obj
+
+        mb_init = torch.tensor([1.0, 0.0])
+        res = tm.minimize(
+            independent_mmd_obj,
+            mb_init,
+            method="l-bfgs",
+            max_iter=5,
+            disp=2,
+        )
+        mb_opt = res.x.numpy()
+        M_[fix, fix] = mb_opt[0]
+        b_[fix] = mb_opt[1]
     return (M_, b_, None)
 
 
@@ -823,7 +934,7 @@ class ConDoAdapter:
                     **self.mmd_kwargs,
                 )
             else:
-                self.M_, self.b_, debug_tuple = run_mmd_independent(
+                self.M_, self.b_, debug_tuple = run_mmd_independent_torchmin(
                     S=S,
                     T=T,
                     X_S=X_S,
@@ -831,7 +942,6 @@ class ConDoAdapter:
                     Xtest=Xtest,
                     debug=self.debug,
                     verbose=self.verbose,
-                    **self.mmd_kwargs,
                 )
             if debug_tuple is not None:
                 (self.m_plot_, self.b_plot_, self.mb_objs_) = debug_tuple
