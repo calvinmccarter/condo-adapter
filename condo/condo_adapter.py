@@ -28,14 +28,14 @@ from condo.cat_kernels import (
 
 
 def run_mmd_independent(
-    S,
-    T,
-    X_S,
-    X_T,
-    Xtest,
-    debug: bool = False,
-    verbose: Union[bool, int] = 0,
-    epochs: int = 10,
+    S: np.ndarray,
+    T: np.ndarray,
+    X_S: np.ndarray,
+    X_T: np.ndarray,
+    Xtest: np.ndarray,
+    debug: bool,
+    verbose: Union[bool, int],
+    epochs: int = 100,
     batch_size: int = 16,
     alpha: float = 1e-2,
     beta: float = 0.9,
@@ -48,13 +48,14 @@ def run_mmd_independent(
             kernel matrix will be of size (batch_size, batch_size).
             The number of batches per epoch is num_S*num_T / (batch_size ** 2).
 
-        alpha: gradient descent step size
+        alpha: gradient descent learning rate (ie step size).
 
         beta: Nesterov momentum
 
     Returns:
         M: (num_feats, num_feats)
         b: (num_feats,)
+        debug_tuple: (m_plot, b_plot, mb_objs) or None
     """
     rng = np.random.RandomState(42)
     num_S = S.shape[0]
@@ -67,8 +68,9 @@ def run_mmd_independent(
     confounder_is_cat = (Xtest.dtype == bool) or not np.issubdtype(
         Xtest.dtype, np.number
     )
-    assert num_confounders == 1
-    # TODO: handle multiple confounders
+    if num_confounders != 1:
+        # TODO: handle multiple confounders
+        raise NotImplementedError(f"MMD affine num_confounders:{num_confounders}")
 
     if confounder_is_cat:
         target_kernel = CatKernel()
@@ -90,19 +92,21 @@ def run_mmd_independent(
 
     batches = round(num_S * num_T / (batch_size * batch_size))
     terms_per_batch = num_testu * batch_size * batch_size
-    recip = 1.0 / terms_per_batch
     debug_tuple = None
-    rbf_factor = -1 / (2 * np.var(np.vstack([T, S])))
+
     for fix in range(num_feats):
         M = torch.eye(1, 1, dtype=torch.float64, requires_grad=True)
-        M = torch.tensor(1.0, dtype=torch.float64, requires_grad=True)
         b = torch.zeros(1, dtype=torch.float64, requires_grad=True)
-        b = torch.tensor(0.0, dtype=torch.float64, requires_grad=True)
+
+        obj_history = []
+        best_M = np.eye(1, 1)
+        best_b = np.zeros(1)
+
         for epoch in range(epochs):
+            epoch_start_M = M.detach().numpy()
+            epoch_start_b = b.detach().numpy()
             Mz = torch.zeros(1, 1)
             bz = torch.zeros(1)
-            Mz = torch.tensor(1.0, dtype=torch.float64, requires_grad=True)
-            bz = torch.tensor(0.0, dtype=torch.float64, requires_grad=True)
 
             objs = np.zeros(batches)
             for batch in range(batches):
@@ -120,29 +124,47 @@ def run_mmd_independent(
                 ]
                 obj = torch.tensor(0.0, requires_grad=True)
                 for cix in range(num_testu):
-                    for tix in range(batch_size):
-                        T_cur = T_torch[tgtsample_ixs[cix][tix], fix]
-                        for six in range(batch_size):
-                            S_cur = S_torch[srcsample_ixs[cix][six], fix]
-                            obj = obj - 2 * recip * Xtestu_counts[cix] * torch.exp(
-                                rbf_factor * torch.sum((T_cur - (M * S_cur + b)) ** 2)
+                    Tsample = (T_torch[tgtsample_ixs[cix], fix]).reshape(-1, 1)
+                    adaptedSsample = (S_torch[srcsample_ixs[cix], fix]).reshape(
+                        -1, 1
+                    ) @ M.T + b.reshape(1, -1)
+                    length_scale = (
+                        torch.mean((Tsample - adaptedSsample) ** 2).detach().numpy()
+                    )
+                    factor = Xtestu_counts[cix] / terms_per_batch
+                    obj = obj - 2 * factor * torch.sum(
+                        torch.exp(
+                            -1.0
+                            / (2 * length_scale)
+                            * (
+                                (Tsample @ Tsample.T).diag().unsqueeze(1)
+                                - 2 * Tsample @ adaptedSsample.T
+                                + (adaptedSsample @ adaptedSsample.T)
+                                .diag()
+                                .unsqueeze(0)
                             )
-                    for six1 in range(batch_size):
-                        S_cur1 = S_torch[srcsample_ixs[cix][six1], fix]
-                        for six2 in range(batch_size):
-                            S_cur2 = S_torch[srcsample_ixs[cix][six2], fix]
-                            obj = obj + recip * Xtestu_counts[cix] * torch.exp(
-                                rbf_factor * torch.sum(((M * (S_cur1 - S_cur2)) ** 2))
+                        )
+                    )
+                    obj = obj + factor * torch.sum(
+                        torch.exp(
+                            -1.0
+                            / (2 * length_scale)
+                            * (
+                                (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(1)
+                                - 2 * adaptedSsample @ adaptedSsample.T
+                                + (adaptedSsample @ adaptedSsample.T)
+                                .diag()
+                                .unsqueeze(0)
                             )
+                        )
+                    )
 
                 obj.backward()
-                # print(f"before update M:{M} b:{b} M.grad:{M.grad} b.grad:{b.grad}")
                 with torch.no_grad():
                     Mz = beta * Mz + M.grad
                     bz = beta * bz + b.grad
                     M -= alpha * Mz
                     b -= alpha * bz
-                # print(f"updated M:{M} b:{b}")
 
                 M.grad.zero_()
                 b.grad.zero_()
@@ -151,48 +173,80 @@ def run_mmd_independent(
                         f"epoch:{epoch}/{epochs} batch:{batch}/{batches} obj:{obj:.5f}"
                     )
                 objs[batch] = obj.detach().numpy()
+            last_obj = np.mean(objs)
             if verbose >= 1:
-                print(
-                    f"epoch:{epoch} {objs[0]:.5f}->{objs[-1]:.5f} avg:{np.mean(objs):.5f}"
-                )
-        M_[fix, fix] = M.detach().numpy()
-        b_[fix] = b.detach().numpy()
-        if debug and fix == 0 and False:
+                print(f"epoch:{epoch} {objs[0]:.5f}->{objs[-1]:.5f} avg:{last_obj:.5f}")
+            if epoch > 0 and last_obj < np.min(np.array(obj_history)):
+                best_M = epoch_start_M
+                best_b = epoch_start_b
+            if len(obj_history) >= 10:
+                if last_obj > np.max(np.array(obj_history[-10:])):
+                    # Terminate early if worse than all previous 10 iterations
+                    if verbose >= 1:
+                        print(f"Terminating {fix} after epoch {epoch}: {last_obj:.5f}")
+                    break
+            obj_history.append(last_obj)
+
+        M_[fix, fix] = best_M
+        b_[fix] = best_b
+        if debug and fix == 0:
 
             def mmd_obj(cur_m, cur_b):
-                obj = 0.0
+                tgtsample_ixs = [
+                    rng.choice(
+                        num_T, size=100, replace=True, p=T_weights[:, cix]
+                    ).tolist()
+                    for cix in range(num_testu)
+                ]
+                srcsample_ixs = [
+                    rng.choice(
+                        num_S, size=100, replace=True, p=S_weights[:, cix]
+                    ).tolist()
+                    for cix in range(num_testu)
+                ]
+                obj = torch.tensor(0.0)
                 for cix in range(num_testu):
-                    for tix in range(num_T):
-                        T_cur = T[tix, fix]
-                        # print(f"cix:{cix}/{num_testu} tix:{tix}")
-                        for six in range(num_S):
-                            S_cur = S[six, fix]
-                            obj -= (
-                                2
-                                * T_weights[tix, cix]
-                                * S_weights[six, cix]
-                                * Xtestu_counts[cix]
-                            ) * np.exp(
-                                -0.5 * np.sum((T_cur - (cur_m * S_cur + cur_b)) ** 2)
+                    Tsample = (T_torch[tgtsample_ixs[cix], fix]).reshape(-1, 1)
+                    adaptedSsample = (S_torch[srcsample_ixs[cix], fix]).reshape(
+                        -1, 1
+                    ) @ M.T + b.reshape(1, -1)
+                    length_scale = (
+                        torch.mean((Tsample - adaptedSsample) ** 2).detach().numpy()
+                    )
+                    factor = Xtestu_counts[cix] / terms_per_batch
+                    obj = obj - 2 * factor * torch.sum(
+                        torch.exp(
+                            -1.0
+                            / (2 * length_scale)
+                            * (
+                                (Tsample @ Tsample.T).diag().unsqueeze(1)
+                                - 2 * Tsample @ adaptedSsample.T
+                                + (adaptedSsample @ adaptedSsample.T)
+                                .diag()
+                                .unsqueeze(0)
                             )
-                    for six1 in range(num_S):
-                        S_cur1 = S[six1, fix]
-                        # print(f"cix:{cix}/{num_testu} six1:{six1}")
-                        for six2 in range(num_S):
-                            S_cur2 = S[six2, fix]
-                            obj += (
-                                S_weights[six1, cix]
-                                * S_weights[six2, cix]
-                                * Xtestu_counts[cix]
-                            ) * np.exp(
-                                -0.5 * np.sum(((cur_m * (S_cur1 - S_cur2)) ** 2))
+                        )
+                    )
+                    obj = obj + factor * torch.sum(
+                        torch.exp(
+                            -1.0
+                            / (2 * length_scale)
+                            * (
+                                (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(1)
+                                - 2 * adaptedSsample @ adaptedSsample.T
+                                + (adaptedSsample @ adaptedSsample.T)
+                                .diag()
+                                .unsqueeze(0)
                             )
+                        )
+                    )
+                return obj.detach().numpy()
 
-            m_plot = np.geomspace(M_[fix, fix] / 5, M_[fix, fix] * 5, 7)
-            b_plot = np.linspace(b_[fix] - 10, b_[fix] + 10, 4)
-            mb_objs = np.zeros((7, 4))
-            for mix in range(7):
-                for bix in range(4):
+            m_plot = np.geomspace(M_[fix, fix] / 10, M_[fix, fix] * 10, 70)
+            b_plot = np.linspace(b_[fix] - 10, b_[fix] + 10, 40)
+            mb_objs = np.zeros((70, 40))
+            for mix in range(70):
+                for bix in range(40):
                     with torch.no_grad():
                         mb_objs[mix, bix] = mmd_obj(m_plot[mix], b_plot[bix])
             debug_tuple = (m_plot, b_plot, mb_objs)
@@ -201,14 +255,14 @@ def run_mmd_independent(
 
 
 def run_mmd_affine(
-    S,
-    T,
-    X_S,
-    X_T,
-    Xtest,
-    debug: bool = False,
-    verbose: Union[bool, int] = 0,
-    epochs: int = 10,
+    S: np.ndarray,
+    T: np.ndarray,
+    X_S: np.ndarray,
+    X_T: np.ndarray,
+    Xtest: np.ndarray,
+    debug: bool,
+    verbose: Union[bool, int],
+    epochs: int = 100,
     batch_size: int = 16,
     alpha: float = 1e-2,
     beta: float = 0.9,
@@ -223,13 +277,14 @@ def run_mmd_affine(
             kernel matrix will be of size (batch_size, batch_size).
             The number of batches per epoch is num_S*num_T / (batch_size ** 2).
 
-        alpha: gradient descent step size
+        alpha: gradient descent learning rate (ie step size).
 
         beta: Nesterov momentum
 
     Returns:
         M: (num_feats, num_feats)
         b: (num_feats,)
+        debug_tuple: (m_plot, b_plot, mb_objs) or None
     """
     rng = np.random.RandomState(42)
     num_S = S.shape[0]
@@ -240,10 +295,28 @@ def run_mmd_affine(
     confounder_is_cat = (Xtest.dtype == bool) or not np.issubdtype(
         Xtest.dtype, np.number
     )
-    assert num_confounders == 1
-    # TODO: handle multiple confounders
+    if num_confounders != 1:
+        # TODO: handle multiple confounders
+        raise NotImplementedError(f"MMD affine num_confounders:{num_confounders}")
 
     if confounder_is_cat:
+        # TODO- this did not work, not sure why
+        """
+        S_noise_dict = dict(
+            [
+                (catname, np.var(S[np.where(X_S[:, 0] == catname), :]))
+                for catname in list(set(list(X_S[:, 0])))
+            ]
+        )
+        source_kernel = CatKernel() + HeteroscedasticCatKernel(S_noise_dict)
+        T_noise_dict = dict(
+            [
+                (catname, np.var(T[np.where(X_T[:, 0] == catname), :]))
+                for catname in list(set(list(X_T[:, 0])))
+            ]
+        )
+        target_kernel = CatKernel() + HeteroscedasticCatKernel(T_noise_dict)
+        """
         target_kernel = CatKernel()
         source_kernel = CatKernel()
         (Xtestu, Xtestu_counts) = np.unique(Xtest, axis=0, return_counts=True)
@@ -267,9 +340,7 @@ def run_mmd_affine(
     terms_per_batch = num_testu * batch_size * batch_size
     obj_history = []
     best_M = np.eye(num_feats, num_feats)
-    best_b = np.zeros(
-        num_feats,
-    )
+    best_b = np.zeros(num_feats)
     for epoch in range(epochs):
         epoch_start_M = M.detach().numpy()
         epoch_start_b = b.detach().numpy()
@@ -468,6 +539,9 @@ def heteroscedastic_gp_distr(
     if num_confounders > 1:
         raise NotImplementedError(f"num_confounders {num_confounders}")
     confounder_is_cat = (X.dtype == bool) or not np.issubdtype(X.dtype, np.number)
+    if num_confounders != 1:
+        # TODO: handle multiple confounders
+        raise NotImplementedError(f"MMD affine num_confounders:{num_confounders}")
 
     est_mus = np.zeros((num_test, num_feats))
     est_sigmas = np.zeros((num_test, num_feats))
@@ -915,9 +989,11 @@ class ConDoAdapter:
                 confounding variables ("sum", "product"). The default
                 is "sum" because this is less likely to overfit.
 
-            optim_kwargs: Args for optimization. If mmd, valid keys are "epochs",
-                "alpha" (learning rate), and "beta" (momentum). If forward or reverse KL,
-                valid keys are "method" (eg "l-bfgs") and "max_iter".
+            optim_kwargs: Dict containing args for optimization.
+                If mmd, valid keys are "epochs", "batch_size",
+                "alpha" (learning rate), and "beta" (momentum).
+                If forward or reverse KL, valid keys are "method" (eg "l-bfgs")
+                and "max_iter".
 
             verbose: Bool or integer that indicates the verbosity.
 
