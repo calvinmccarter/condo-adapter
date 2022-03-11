@@ -265,7 +265,6 @@ def run_mmd_affine(
     b = torch.zeros(num_feats, dtype=torch.float64, requires_grad=True)
     batches = round(num_S * num_T / (batch_size * batch_size))
     terms_per_batch = num_testu * batch_size * batch_size
-    recip = 1.0 / terms_per_batch
     for epoch in range(epochs):
         Mz = torch.zeros(num_feats, num_feats)
         bz = torch.zeros(num_feats)
@@ -290,25 +289,30 @@ def run_mmd_affine(
                 length_scale = (
                     torch.mean((Tsample - adaptedSsample) ** 2).detach().numpy()
                 )
+                factor = Xtestu_counts[cix] / terms_per_batch
+                obj = obj - 2 * factor * torch.sum(
+                    torch.exp(
+                        -1.0
+                        / (2 * length_scale)
+                        * (
+                            (Tsample @ Tsample.T).diag().unsqueeze(1)
+                            - 2 * Tsample @ adaptedSsample.T
+                            + (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(0)
+                        )
+                    )
+                )
+                obj = obj + factor * torch.sum(
+                    torch.exp(
+                        -1.0
+                        / (2 * length_scale)
+                        * (
+                            (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(1)
+                            - 2 * adaptedSsample @ adaptedSsample.T
+                            + (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(0)
+                        )
+                    )
+                )
 
-                for tix in range(batch_size):
-                    T_cur = T_torch[tgtsample_ixs[cix][tix], :]
-                    for six in range(batch_size):
-                        S_cur = S_torch[srcsample_ixs[cix][six], :]
-                        obj = obj - 2 * recip * torch.exp(
-                            -0.5
-                            / length_scale
-                            * torch.sum((T_cur - (M @ S_cur + b)) ** 2)
-                        )
-                for six1 in range(batch_size):
-                    S_cur1 = S_torch[srcsample_ixs[cix][six1], :]
-                    for six2 in range(batch_size):
-                        S_cur2 = S_torch[srcsample_ixs[cix][six2], :]
-                        obj = obj + recip * torch.exp(
-                            -0.5
-                            / length_scale
-                            * torch.sum(((M @ (S_cur1 - S_cur2)) ** 2))
-                        )
             obj.backward()
             with torch.no_grad():
                 Mz = beta * Mz + M.grad
