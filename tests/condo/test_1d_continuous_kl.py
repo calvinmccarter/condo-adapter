@@ -62,5 +62,5 @@ def test_1d_continuous(sampling, transform_type, model_type, divergence):
     reldiff_post = 2 * np.abs(Sadapted - Strue) / (np.abs(Sadapted) + np.abs(Strue))
     np.testing.assert_array_less(reldiff_post.mean(axis=0), reldiff_pre.mean(axis=0))
     np.testing.assert_allclose(Strue, Sadapted, atol=0.1, rtol=1.0)
-    np.testing.assert_allclose(np.array([true_m]), cder.m_, atol=1.0, rtol=1.0)
+    np.testing.assert_allclose(np.array([true_m]), cder.M_[0, 0], atol=1.0, rtol=1.0)
     np.testing.assert_allclose(np.array([true_b]), cder.b_, atol=1.0, rtol=1.0)

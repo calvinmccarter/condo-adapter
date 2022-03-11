@@ -334,206 +334,6 @@ def run_mmd_affine(
     return (M_, b_, None)
 
 
-def run_mmd_independent_torchmin(
-    S,
-    T,
-    X_S,
-    X_T,
-    Xtest,
-    debug: bool = False,
-    verbose: Union[bool, int] = 0,
-):
-    num_S = S.shape[0]
-    num_T = T.shape[0]
-    num_test = Xtest.shape[0]
-    num_feats = S.shape[1]
-    print(num_feats)
-    num_confounders = X_S.shape[1]
-    M_ = np.eye(num_feats, num_feats)
-    b_ = np.zeros(num_feats)
-    confounder_is_cat = (Xtest.dtype == bool) or not np.issubdtype(
-        Xtest.dtype, np.number
-    )
-    assert num_confounders == 1
-    # TODO: handle multiple confounders
-
-    if confounder_is_cat:
-        target_kernel = CatKernel()
-        source_kernel = CatKernel()
-        (Xtestu, Xtestu_counts) = np.unique(Xtest, axis=0, return_counts=True)
-        num_testu = Xtestu.shape[0]
-        """
-        Xtestu = Xtest
-        num_testu = num_test
-        Xtestu_counts = np.ones(num_testu)
-        """
-    else:
-        target_kernel = 1.0 * RBF(length_scale=np.std(X_S))
-        source_kernel = 1.0 * RBF(length_scale=np.std(X_T))
-        Xtestu = Xtest
-        num_testu = num_test
-        Xtestu_counts = np.ones(num_testu)
-    target_similarities = target_kernel(X_T, Xtestu)  # (num_T, num_testu)
-    T_weights = target_similarities / np.sum(target_similarities, axis=0, keepdims=True)
-    source_similarities = source_kernel(X_S, Xtestu)  # (num_T, num_testu)
-    S_weights = source_similarities / np.sum(source_similarities, axis=0, keepdims=True)
-    T_torch = torch.from_numpy(T)
-    S_torch = torch.from_numpy(S)
-
-    for fix in range(num_feats):
-
-        def independent_mmd_obj(mb):
-            m = mb[0]
-            b = mb[1]
-
-            obj = torch.tensor(0.0)
-            foo = torch.tensor(0.0)
-            bar = torch.tensor(0.0)
-            for cix in range(num_testu):
-                cur_count = Xtestu_counts[cix]
-                for tix in range(num_T):
-                    T_cur = T_torch[tix, fix]
-                    T_cur_weight = T_weights[tix, cix]
-                    for six in range(num_S):
-                        S_cur = S_torch[six, fix]
-                        S_cur_weight = S_weights[six, cix]
-                        hey = (2 * T_cur_weight * S_cur_weight * cur_count) * torch.exp(
-                            -0.5 * torch.sum((T_cur - (m * S_cur + b)) ** 2)
-                        )
-                        obj -= hey
-                        foo -= hey
-
-                """
-                for six1 in range(num_S):
-                    S_cur1 = S_torch[six1, fix]
-                    S_cur1_weight = S_weights[six1, cix]
-                    for six2 in range(num_S):
-                        S_cur2 = S_torch[six2, fix]
-                        S_cur2_weight = S_weights[six2, cix]
-                        sqdist = ((m * (S_cur1 - S_cur2)) ** 2)
-                        before_exp = -0.5 * ((m * (S_cur1 - S_cur2)) ** 2)
-                        after_exp = torch.exp(before_exp)
-                        hoo = (S_cur1_weight * S_cur2_weight * cur_count) * torch.exp(
-                            -0.5 * ((m * (S_cur1 - S_cur2)) ** 2)
-                        )
-                        if six1 == 0 and six2 in (0, 1):
-                            print(f"m:{m}")
-                            print(f"     {six1}:{S_cur1:3f} {six2}:{S_cur2:.3f} {torch.sum(((m * (S_cur1 - S_cur2)) ** 2)):.3f}")
-                            print(f"     {torch.exp(-0.5 * torch.sum(((m * (S_cur1 - S_cur2)) ** 2))):.3f}")
-                            print(f"     sqdist:{sqdist:.3f} before_exp:{before_exp:.3f} after_exp:{after_exp:.3f}")
-                        obj += hoo
-                        bar += hoo
-                """
-            print(f"obj:{obj} foo:{foo} bar:{bar}")
-            return obj
-
-        mb_init = torch.tensor([1.0, 0.0])
-        res = tm.minimize(
-            independent_mmd_obj,
-            mb_init,
-            method="l-bfgs",
-            max_iter=5,
-            disp=2,
-        )
-        mb_opt = res.x.numpy()
-        M_[fix, fix] = mb_opt[0]
-        b_[fix] = mb_opt[1]
-    return (M_, b_, None)
-
-
-def run_mmd_original(
-    S,
-    T,
-    X_S,
-    X_T,
-    Xtest,
-    debug: bool = False,
-    verbose: Union[bool, int] = 0,
-):
-    num_S = S.shape[0]
-    num_T = T.shape[0]
-    num_test = Xtest.shape[0]
-    num_feats = S.shape[1]
-    num_confounders = X_S.shape[1]
-    M_ = np.eye(num_feats, num_feats)
-    b_ = np.zeros(num_feats)
-    assert num_confounders == 1
-
-    M_ = np.eye(num_feats, num_feats)
-    b_ = np.zeros((1, num_feats))
-    num_consample = min(10, num_test)
-    num_srcsample = min(20, num_S)
-    num_tgtsample = min(20, num_T)
-    consample_ixs = np.random.choice(num_test, size=num_consample, replace=False)
-    X_consample = Xtest[consample_ixs, :]
-    confounder_is_cat = (Xtest.dtype == bool) or not np.issubdtype(
-        Xtest.dtype, np.number
-    )
-    print(confounder_is_cat)
-    if confounder_is_cat:
-        target_kernel = CatKernel()
-        source_kernel = CatKernel()
-    else:
-        target_kernel = 1.0 * RBF(length_scale=np.std(X_S))
-        source_kernel = 1.0 * RBF(length_scale=np.std(X_T))
-
-    target_similarities = target_kernel(X_T, X_consample)  # (num_T, num_consample)
-    target_weights = target_similarities / np.sum(
-        target_similarities, axis=0, keepdims=True
-    )
-    tgtsample_ixs = [
-        np.random.choice(
-            num_T, size=num_tgtsample, replace=False, p=target_weights[:, cix]
-        ).tolist()
-        for cix in range(num_consample)
-    ]
-    source_similarities = source_kernel(X_S, X_consample)  # (num_T, num_consample)
-    source_weights = source_similarities / np.sum(
-        source_similarities, axis=0, keepdims=True
-    )
-    srcsample_ixs = [
-        np.random.choice(
-            num_S, size=num_srcsample, replace=False, p=source_weights[:, cix]
-        ).tolist()
-        for cix in range(num_consample)
-    ]
-    T_torch = torch.from_numpy(T)
-    S_torch = torch.from_numpy(S)
-
-    def joint_mmd_obj(mb):
-        M = mb[0:num_feats, :]  # (num_feats, num_feats)
-        b = mb[num_feats, :]  # (num_feats,)
-
-        obj = torch.tensor(0.0)
-        for cix in range(num_consample):
-            for tix in range(num_tgtsample):
-                T_cur = T_torch[tgtsample_ixs[cix][tix], :]
-                for six in range(num_srcsample):
-                    S_cur = S_torch[srcsample_ixs[cix][six], :]
-                    obj -= 2 * torch.exp(
-                        -0.5 * torch.sum((T_cur - (M @ S_cur + b)) ** 2)
-                    )
-            for six1 in range(num_srcsample):
-                S_cur1 = S_torch[srcsample_ixs[cix][six1], :]
-                for six2 in range(num_srcsample):
-                    S_cur2 = S_torch[srcsample_ixs[cix][six2], :]
-                    obj += torch.exp(-0.5 * torch.sum(((M @ (S_cur1 - S_cur2)) ** 2)))
-        return obj
-
-    mb_init = torch.from_numpy(np.vstack([M_, b_]))
-    res = tm.minimize(
-        joint_mmd_obj,
-        mb_init,
-        method="l-bfgs",
-        max_iter=50,
-        disp=verbose,
-    )
-    mb_opt = res.x.numpy()
-    M_ = mb_opt[0:num_feats, :]  # (num_feats, num_feats)
-    b_ = mb_opt[num_feats, :]  # (num_feats,)
-    return (M_, b_, None)
-
-
 def joint_linear_distr(
     D: np.ndarray,
     X: np.ndarray,
@@ -777,6 +577,292 @@ def homoscedastic_gp_distr(
     return (est_mus, est_sigmas, gper)
 
 
+def run_kl_linear_affine(
+    S: np.ndarray,
+    T: np.ndarray,
+    X_S: np.ndarray,
+    X_T: np.ndarray,
+    Xtest: np.ndarray,
+    divergence: str,
+    debug: bool,
+    verbose: Union[bool, int],
+    max_iter: int = 50,
+):
+    m_ = None
+    M_ = np.eye(num_feats, num_feats)
+    b_ = np.zeros((1, num_feats))
+    (est_mu_T_all, est_Sigma_T, predictor_T) = joint_linear_distr(
+        D=T,
+        X=X_T,
+        Xtest=Xtest,
+        verbose=verbose,
+    )
+    Est_mu_T_all = [torch.from_numpy(est_mu_T_all[[i], :].T) for i in range(num_test)]
+    Est_Sigma_T = torch.from_numpy(est_Sigma_T)
+    Est_inv_Sigma_T = torch.from_numpy(np.linalg.inv(est_Sigma_T))
+    (est_mu_S_all, est_Sigma_S, predictor_S) = joint_linear_distr(
+        D=S,
+        X=X_S,
+        Xtest=Xtest,
+        verbose=verbose,
+    )
+    Est_mu_S_all = [torch.from_numpy(est_mu_S_all[[i], :].T) for i in range(num_test)]
+    Est_Sigma_S = torch.from_numpy(est_Sigma_S)
+
+    if divergence == "forward":
+
+        def joint_forward_kl_obj(mb):
+            M = mb[0:num_feats, :]  # (num_feats, num_feats)
+            b = (mb[num_feats, :]).view(-1, 1)  # (num_feats, 1)
+
+            MSMTinv = torch.linalg.inv(M @ Est_Sigma_S @ M.T)
+
+            obj = num_test * torch.logdet(M @ Est_Sigma_S @ M.T)
+            obj += num_test * torch.einsum(
+                "ij,ji->",
+                Est_Sigma_T,
+                MSMTinv,
+            )
+            # obj += num_test * 1e-8 * torch.sum(M ** 2)
+            for n in range(num_test):
+                # err_n has size (num_feats, 1)
+                err_n = M @ Est_mu_S_all[n] + b - Est_mu_T_all[n]
+                obj += (err_n.T @ MSMTinv @ err_n).squeeze()
+            return obj
+
+        mb_init = torch.from_numpy(np.vstack([M_, b_]))
+        res = tm.minimize(
+            joint_forward_kl_obj,
+            mb_init,
+            method="l-bfgs",
+            max_iter=max_iter,
+            disp=verbose,
+        )
+        mb_opt = res.x.numpy()
+        M_ = mb_opt[0:num_feats, :]  # (num_feats, num_feats)
+        b_ = mb_opt[num_feats, :]  # (num_feats,)
+
+    elif divergence == "reverse":
+        # TODO: speedup via explicit gradient torchmin trick
+        # TODO: or speedup by vectorizing the for-loop
+        # TODO: simplify the logdet(M @ Sigma_S @ M) term
+        def joint_reverse_kl_obj(mb):
+            M = mb[0:num_feats, :]  # (num_feats, num_feats)
+            b = (mb[num_feats, :]).view(-1, 1)  # (num_feats, 1)
+
+            obj = num_test * -1.0 * torch.logdet(M @ Est_Sigma_S @ M.T)
+            obj += num_test * torch.einsum(
+                "ij,ji->",
+                Est_inv_Sigma_T @ M,
+                Est_Sigma_S @ M.T,
+            )
+            # obj += num_test * 1e-8 * torch.sum(M ** 2)
+            # obj += -10 * torch.sum(torch.clamp(M, min=float('-inf'), max=0))
+            for n in range(num_test):
+                # err_n has size (num_feats, 1)
+                err_n = M @ Est_mu_S_all[n] + b - Est_mu_T_all[n]
+                obj += (err_n.T @ Est_inv_Sigma_T @ err_n).squeeze()
+            return obj
+
+        mb_init = torch.from_numpy(np.vstack([M_, b_]))
+        res = tm.minimize(
+            joint_reverse_kl_obj,
+            mb_init,
+            method="l-bfgs",
+            max_iter=max_iter,
+            disp=verbose,
+        )
+        mb_opt = res.x.numpy()
+        M_ = mb_opt[0:num_feats, :]  # (num_feats, num_feats)
+        b_ = mb_opt[num_feats, :]  # (num_feats,)
+    return (M_, b_, None)
+
+
+def run_kl_independent(
+    S: np.ndarray,
+    T: np.ndarray,
+    X_S: np.ndarray,
+    X_T: np.ndarray,
+    Xtest: np.ndarray,
+    model_type: str,
+    divergence: str,
+    multi_confounder_kernel: str,
+    debug: bool,
+    verbose: Union[bool, int],
+    method: str = "l-bfgs",
+    max_iter: int = 50,
+):
+    num_feats = S.shape[1]
+    num_confounders = X_S.shape[1]
+
+    M_ = np.zeros((num_feats, num_feats))
+    m_ = np.zeros(num_feats)
+    b_ = np.zeros(num_feats)
+    debug_tuple = None
+    if model_type == "linear":
+        (est_mu_T_all, est_sigma_T_all, predictor_T) = independent_linear_distr(
+            D=T,
+            X=X_T,
+            Xtest=Xtest,
+            verbose=verbose,
+        )
+        (est_mu_S_all, est_sigma_S_all, predictor_S) = independent_linear_distr(
+            D=S,
+            X=X_S,
+            Xtest=Xtest,
+            verbose=verbose,
+        )
+    elif model_type == "homoscedastic-gp":
+        (est_mu_T_all, est_sigma_T_all, predictor_T) = homoscedastic_gp_distr(
+            D=T,
+            X=X_T,
+            Xtest=Xtest,
+            multi_confounder_kernel=multi_confounder_kernel,
+            verbose=verbose,
+        )
+        (est_mu_S_all, est_sigma_S_all, predictor_S) = homoscedastic_gp_distr(
+            D=S,
+            X=X_S,
+            Xtest=Xtest,
+            multi_confounder_kernel=multi_confounder_kernel,
+            verbose=verbose,
+        )
+    elif model_type == "heteroscedastic-gp":
+        (est_mu_T_all, est_sigma_T_all, predictor_T) = heteroscedastic_gp_distr(
+            D=T,
+            X=X_T,
+            Xtest=Xtest,
+            multi_confounder_kernel=multi_confounder_kernel,
+            verbose=verbose,
+        )
+        (est_mu_S_all, est_sigma_S_all, predictor_S) = heteroscedastic_gp_distr(
+            D=S,
+            X=X_S,
+            Xtest=Xtest,
+            multi_confounder_kernel=multi_confounder_kernel,
+            verbose=verbose,
+        )
+
+    est_var_T_all = est_sigma_T_all**2
+    est_var_S_all = est_sigma_S_all**2
+    if divergence == "forward":
+        F_0 = np.mean(est_var_S_all * np.log(est_sigma_S_all / est_sigma_T_all), axis=0)
+        F_1 = np.mean(est_var_S_all, axis=0)
+        F_2 = np.mean(est_mu_T_all * est_mu_S_all, axis=0)
+        F_3 = np.mean(est_mu_T_all, axis=0)
+        F_4 = np.mean(est_mu_S_all**2, axis=0)
+        F_5 = np.mean(est_mu_S_all, axis=0)
+        F_6 = np.ones(num_feats)
+
+        # Loop over features since independent not joint
+        for fix in range(num_feats):
+            (f_0, f_1, f_2, f_3, f_4, f_5, f_6) = (
+                F_0[fix],
+                F_1[fix],
+                F_2[fix],
+                F_3[fix],
+                F_4[fix],
+                F_5[fix],
+                F_6[fix],
+            )
+
+            def forward_kl_obj(mb):
+                m, b = mb[0], mb[1]
+                obj = (
+                    +2 * (m**2) * f_0
+                    + 2 * (m**2) * torch.log(m) * f_1
+                    - 2 * m * f_2
+                    - 2 * b * f_3
+                    + (m**2) * f_4
+                    + 2 * m * b * f_5
+                    + (b**2) * f_6
+                )
+                return obj
+
+            mb_init = torch.tensor([1.0, 0.0])
+            res = tm.minimize(
+                forward_kl_obj,
+                mb_init,
+                method=method,
+                max_iter=max_iter,
+                disp=verbose,
+            )
+            (m_[fix], b_[fix]) = res.x.numpy()
+
+            if debug and fix == 0:
+                m_plot_ = np.geomspace(m_[fix] / 10, m_[fix] * 10, 500)
+                b_plot_ = np.linspace(b_[fix] - 10, b_[fix] + 10, 200)
+                mb_objs_ = np.zeros((500, 200))
+                for mix in range(500):
+                    for bix in range(200):
+                        with torch.no_grad():
+                            mb_objs_[mix, bix] = forward_kl_obj(
+                                torch.tensor([m_plot_[mix], b_plot_[bix]])
+                            ).numpy()
+                debug_tuple = (m_plot_, b_plot_, mb_objs_)
+        M_ = np.diag(m_)
+        return (M_, b_, debug_tuple)
+
+    elif divergence == "reverse":
+        R_1 = 2 * np.mean(est_var_T_all, axis=0)
+        R_2 = np.mean(est_var_S_all, axis=0)
+        R_3 = np.mean(est_mu_S_all**2, axis=0)
+        R_4 = 2 * np.mean(est_mu_S_all, axis=0)
+        R_5 = 2 * np.mean(est_mu_S_all * est_mu_T_all, axis=0)
+        R_6 = np.ones(num_feats)
+        R_7 = 2 * np.mean(est_mu_T_all, axis=0)
+
+        # Loop over features since independent not joint
+        for fix in range(num_feats):
+            (r_1, r_2, r_3, r_4, r_5, r_6, r_7) = (
+                R_1[fix],
+                R_2[fix],
+                R_3[fix],
+                R_4[fix],
+                R_5[fix],
+                R_6[fix],
+                R_7[fix],
+            )
+
+            def reverse_kl_obj(mb):
+                m, b = mb[0], mb[1]
+                obj = (
+                    -2 * r_1 * torch.log(m)
+                    + r_2 * (m**2)
+                    + r_3 * (m**2)
+                    + r_4 * m * b
+                    - r_5 * m
+                    + r_6 * (b**2)
+                    - r_7 * b
+                )
+                return obj
+
+            mb_init = torch.tensor([1.0, 0.0])
+            res = tm.minimize(
+                reverse_kl_obj,
+                mb_init,
+                method=method,
+                max_iter=max_iter,
+                disp=verbose,
+            )
+            (m_[fix], b_[fix]) = res.x.numpy()
+            if debug and fix == 0:
+                m_plot_ = np.geomspace(m_[fix] / 10, m_[fix] * 10, 500)
+                b_plot_ = np.linspace(b_[fix] - 10, b_[fix] + 10, 200)
+                mb_objs_ = np.zeros((500, 200))
+                for mix in range(500):
+                    for bix in range(200):
+                        with torch.no_grad():
+                            mb_objs_[mix, bix] = reverse_kl_obj(
+                                torch.tensor([m_plot[mix], b_plot[bix]])
+                            ).numpy()
+                debug_tuple = (m_plot_, b_plot_, mb_objs_)
+        M_ = np.diag(m_)
+        return (M_, b_, debug_tuple)
+    else:
+        assert False
+
+
 class ConDoAdapter:
     def __init__(
         self,
@@ -785,7 +871,7 @@ class ConDoAdapter:
         model_type: str = "linear",
         multi_confounder_kernel: str = "sum",
         divergence: Union[None, str] = "mmd",
-        mmd_kwargs: dict = None,
+        optim_kwargs: dict = None,
         verbose: Union[bool, int] = 1,
         debug: bool = False,
     ):
@@ -812,7 +898,9 @@ class ConDoAdapter:
                 confounding variables ("sum", "product"). The default
                 is "sum" because this is less likely to overfit.
 
-            mmd_kwargs: Args for MMD objective.
+            optim_kwargs: Args for optimization. If mmd, valid keys are "epochs",
+                "alpha" (learning rate), and "beta" (momentum). If forward or reverse KL,
+                valid keys are "method" (eg "l-bfgs") and "max_iter".
 
             verbose: Bool or integer that indicates the verbosity.
 
@@ -835,7 +923,7 @@ class ConDoAdapter:
             raise ValueError(
                 f"invalid multi_confounder_kernel: {multi_confounder_kernel}"
             )
-        if transform_type == "joint" and model_type not in ("linear", "empirical"):
+        if transform_type == "affine" and model_type not in ("linear", "empirical"):
             raise ValueError(
                 f"incompatible (transform_type, model_type): {(transform_type, model_type)}"
             )
@@ -849,7 +937,7 @@ class ConDoAdapter:
         self.model_type = model_type
         self.multi_confounder_kernel = multi_confounder_kernel
         self.divergence = divergence
-        self.mmd_kwargs = deepcopy(mmd_kwargs) or {}
+        self.optim_kwargs = deepcopy(optim_kwargs) or {}
         self.verbose = verbose
         self.debug = debug
 
@@ -862,7 +950,7 @@ class ConDoAdapter:
     ):
         """
 
-        Modifies M_, b_,
+        Modifies M_, b_, possibly m_plot_, b_plot_, mb_objs_
 
         """
         num_S = S.shape[0]
@@ -918,15 +1006,6 @@ class ConDoAdapter:
         num_test = Xtest.shape[0]
         if self.divergence == "mmd":
             if self.transform_type == "affine":
-                """
-                self.M_, self.b_, debug_tuple = run_mmd_original(
-                    S=S,
-                    T=T,
-                    X_S=X_S,
-                    X_T=X_T,
-                    Xtest=Xtest,
-                )
-                """
                 self.M_, self.b_, debug_tuple = run_mmd_affine(
                     S=S,
                     T=T,
@@ -935,10 +1014,10 @@ class ConDoAdapter:
                     Xtest=Xtest,
                     debug=self.debug,
                     verbose=self.verbose,
-                    **self.mmd_kwargs,
+                    **self.optim_kwargs,
                 )
             else:
-                self.M_, self.b_, debug_tuple = run_mmd_independent_torchmin(
+                self.M_, self.b_, debug_tuple = run_mmd_independent(
                     S=S,
                     T=T,
                     X_S=X_S,
@@ -946,273 +1025,54 @@ class ConDoAdapter:
                     Xtest=Xtest,
                     debug=self.debug,
                     verbose=self.verbose,
+                    **self.optim_kwargs,
                 )
             if debug_tuple is not None:
                 (self.m_plot_, self.b_plot_, self.mb_objs_) = debug_tuple
             return self
 
-        if self.transform_type == "joint" and num_feats > 1:
+        assert self.divergence in ("forward", "reverse")
+
+        if self.transform_type == "affine" and num_feats > 1:
             assert self.model_type == "linear"
-            self.m_ = None
-            self.M_ = np.eye(num_feats, num_feats)
-            self.b_ = np.zeros((1, num_feats))
-            (est_mu_T_all, est_Sigma_T, predictor_T) = joint_linear_distr(
-                D=T,
-                X=X_T,
+            self.M_, self.b_, debug_tuple = run_kl_linear_affine(
+                S=S,
+                T=T,
+                X_S=X_S,
+                X_T=X_T,
                 Xtest=Xtest,
+                divergence=self.divergence,
+                debug=self.debug,
                 verbose=self.verbose,
+                **self.optim_kwargs,
             )
-            Est_mu_T_all = [
-                torch.from_numpy(est_mu_T_all[[i], :].T) for i in range(num_test)
-            ]
-            Est_Sigma_T = torch.from_numpy(est_Sigma_T)
-            Est_inv_Sigma_T = torch.from_numpy(np.linalg.inv(est_Sigma_T))
-            (est_mu_S_all, est_Sigma_S, predictor_S) = joint_linear_distr(
-                D=S,
-                X=X_S,
-                Xtest=Xtest,
-                verbose=self.verbose,
-            )
-            Est_mu_S_all = [
-                torch.from_numpy(est_mu_S_all[[i], :].T) for i in range(num_test)
-            ]
-            Est_Sigma_S = torch.from_numpy(est_Sigma_S)
+            if debug_tuple is not None:
+                (self.m_plot_, self.b_plot_, self.mb_objs_) = debug_tuple
+            return self
 
-            if self.divergence == "forward":
-
-                def joint_forward_kl_obj(mb):
-                    M = mb[0:num_feats, :]  # (num_feats, num_feats)
-                    b = (mb[num_feats, :]).view(-1, 1)  # (num_feats, 1)
-
-                    MSMTinv = torch.linalg.inv(M @ Est_Sigma_S @ M.T)
-
-                    obj = num_test * torch.logdet(M @ Est_Sigma_S @ M.T)
-                    obj += num_test * torch.einsum(
-                        "ij,ji->",
-                        Est_Sigma_T,
-                        MSMTinv,
-                    )
-                    # obj += num_test * 1e-8 * torch.sum(M ** 2)
-                    for n in range(num_test):
-                        # err_n has size (num_feats, 1)
-                        err_n = M @ Est_mu_S_all[n] + b - Est_mu_T_all[n]
-                        obj += (err_n.T @ MSMTinv @ err_n).squeeze()
-                    return obj
-
-                mb_init = torch.from_numpy(np.vstack([self.M_, self.b_]))
-                res = tm.minimize(
-                    joint_forward_kl_obj,
-                    mb_init,
-                    method="l-bfgs",
-                    max_iter=50,
-                    disp=self.verbose,
-                )
-                mb_opt = res.x.numpy()
-                self.M_ = mb_opt[0:num_feats, :]  # (num_feats, num_feats)
-                self.b_ = mb_opt[num_feats, :]  # (num_feats,)
-
-            elif self.divergence == "reverse":
-                # TODO: speedup via explicit gradient torchmin trick
-                # TODO: or speedup by vectorizing the for-loop
-                # TODO: simplify the logdet(M @ Sigma_S @ M) term
-                def joint_reverse_kl_obj(mb):
-                    M = mb[0:num_feats, :]  # (num_feats, num_feats)
-                    b = (mb[num_feats, :]).view(-1, 1)  # (num_feats, 1)
-
-                    obj = num_test * -1.0 * torch.logdet(M @ Est_Sigma_S @ M.T)
-                    obj += num_test * torch.einsum(
-                        "ij,ji->",
-                        Est_inv_Sigma_T @ M,
-                        Est_Sigma_S @ M.T,
-                    )
-                    # obj += num_test * 1e-8 * torch.sum(M ** 2)
-                    # obj += -10 * torch.sum(torch.clamp(M, min=float('-inf'), max=0))
-                    for n in range(num_test):
-                        # err_n has size (num_feats, 1)
-                        err_n = M @ Est_mu_S_all[n] + b - Est_mu_T_all[n]
-                        obj += (err_n.T @ Est_inv_Sigma_T @ err_n).squeeze()
-                    return obj
-
-                mb_init = torch.from_numpy(np.vstack([self.M_, self.b_]))
-                res = tm.minimize(
-                    joint_reverse_kl_obj,
-                    mb_init,
-                    method="l-bfgs",
-                    max_iter=50,
-                    disp=self.verbose,
-                )
-                mb_opt = res.x.numpy()
-                self.M_ = mb_opt[0:num_feats, :]  # (num_feats, num_feats)
-                self.b_ = mb_opt[num_feats, :]  # (num_feats,)
-        else:
+        elif self.transform_type == "location-scale":
             # location-scale transformation treats features independently
-            self.M_ = np.zeros((num_feats, num_feats))
-            self.m_ = np.zeros(num_feats)
-            self.b_ = np.zeros(num_feats)
-            if self.model_type == "linear":
-                (est_mu_T_all, est_sigma_T_all, predictor_T) = independent_linear_distr(
-                    D=T,
-                    X=X_T,
-                    Xtest=Xtest,
-                    verbose=self.verbose,
-                )
-                (est_mu_S_all, est_sigma_S_all, predictor_S) = independent_linear_distr(
-                    D=S,
-                    X=X_S,
-                    Xtest=Xtest,
-                    verbose=self.verbose,
-                )
-            elif self.model_type == "homoscedastic-gp":
-                (est_mu_T_all, est_sigma_T_all, predictor_T) = homoscedastic_gp_distr(
-                    D=T,
-                    X=X_T,
-                    Xtest=Xtest,
-                    multi_confounder_kernel=self.multi_confounder_kernel,
-                    verbose=self.verbose,
-                )
-                (est_mu_S_all, est_sigma_S_all, predictor_S) = homoscedastic_gp_distr(
-                    D=S,
-                    X=X_S,
-                    Xtest=Xtest,
-                    multi_confounder_kernel=self.multi_confounder_kernel,
-                    verbose=self.verbose,
-                )
-            elif self.model_type == "heteroscedastic-gp":
-                (est_mu_T_all, est_sigma_T_all, predictor_T) = heteroscedastic_gp_distr(
-                    D=T,
-                    X=X_T,
-                    Xtest=Xtest,
-                    multi_confounder_kernel=self.multi_confounder_kernel,
-                    verbose=self.verbose,
-                )
-                (est_mu_S_all, est_sigma_S_all, predictor_S) = heteroscedastic_gp_distr(
-                    D=S,
-                    X=X_S,
-                    Xtest=Xtest,
-                    multi_confounder_kernel=self.multi_confounder_kernel,
-                    verbose=self.verbose,
-                )
-
-            est_var_T_all = est_sigma_T_all**2
-            est_var_S_all = est_sigma_S_all**2
-            if self.divergence == "forward":
-                F_0 = np.mean(
-                    est_var_S_all * np.log(est_sigma_S_all / est_sigma_T_all), axis=0
-                )
-                F_1 = np.mean(est_var_S_all, axis=0)
-                F_2 = np.mean(est_mu_T_all * est_mu_S_all, axis=0)
-                F_3 = np.mean(est_mu_T_all, axis=0)
-                F_4 = np.mean(est_mu_S_all**2, axis=0)
-                F_5 = np.mean(est_mu_S_all, axis=0)
-                F_6 = np.ones(num_feats)
-
-                # Loop over features since independent not joint
-                for i in range(num_feats):
-                    (f_0, f_1, f_2, f_3, f_4, f_5, f_6) = (
-                        F_0[i],
-                        F_1[i],
-                        F_2[i],
-                        F_3[i],
-                        F_4[i],
-                        F_5[i],
-                        F_6[i],
-                    )
-
-                    def forward_kl_obj(mb):
-                        m, b = mb[0], mb[1]
-                        obj = (
-                            +2 * (m**2) * f_0
-                            + 2 * (m**2) * torch.log(m) * f_1
-                            - 2 * m * f_2
-                            - 2 * b * f_3
-                            + (m**2) * f_4
-                            + 2 * m * b * f_5
-                            + (b**2) * f_6
-                        )
-                        return obj
-
-                    mb_init = torch.tensor([1.0, 0.0])
-                    res = tm.minimize(
-                        forward_kl_obj,
-                        mb_init,
-                        method="l-bfgs",
-                        max_iter=50,
-                        disp=self.verbose,
-                    )
-                    (self.m_[i], self.b_[i]) = res.x.numpy()
-
-                    if self.debug and i == 0:
-                        m_plot = np.geomspace(self.m_[i] / 10, self.m_[i] * 10, 500)
-                        b_plot = np.linspace(self.b_[i] - 10, self.b_[i] + 10, 200)
-                        self.mb_objs_ = np.zeros((500, 200))
-                        for mix in range(500):
-                            for bix in range(200):
-                                with torch.no_grad():
-                                    self.mb_objs_[mix, bix] = forward_kl_obj(
-                                        torch.tensor([m_plot[mix], b_plot[bix]])
-                                    ).numpy()
-                        self.m_plot_ = m_plot
-                        self.b_plot_ = b_plot
-                self.M_ = np.diag(self.m_)
-
-            elif self.divergence == "reverse":
-                R_1 = 2 * np.mean(est_var_T_all, axis=0)
-                R_2 = np.mean(est_var_S_all, axis=0)
-                R_3 = np.mean(est_mu_S_all**2, axis=0)
-                R_4 = 2 * np.mean(est_mu_S_all, axis=0)
-                R_5 = 2 * np.mean(est_mu_S_all * est_mu_T_all, axis=0)
-                R_6 = np.ones(num_feats)
-                R_7 = 2 * np.mean(est_mu_T_all, axis=0)
-
-                # Loop over features since independent not joint
-                for i in range(num_feats):
-                    (r_1, r_2, r_3, r_4, r_5, r_6, r_7) = (
-                        R_1[i],
-                        R_2[i],
-                        R_3[i],
-                        R_4[i],
-                        R_5[i],
-                        R_6[i],
-                        R_7[i],
-                    )
-
-                    def reverse_kl_obj(mb):
-                        m, b = mb[0], mb[1]
-                        obj = (
-                            -2 * r_1 * torch.log(m)
-                            + r_2 * (m**2)
-                            + r_3 * (m**2)
-                            + r_4 * m * b
-                            - r_5 * m
-                            + r_6 * (b**2)
-                            - r_7 * b
-                        )
-                        return obj
-
-                    mb_init = torch.tensor([1.0, 0.0])
-                    res = tm.minimize(
-                        reverse_kl_obj,
-                        mb_init,
-                        method="l-bfgs",
-                        max_iter=50,
-                        disp=self.verbose,
-                    )
-                    (self.m_[i], self.b_[i]) = res.x.numpy()
-                    if self.debug and i == 0:
-                        m_plot = np.geomspace(self.m_[i] / 10, self.m_[i] * 10, 500)
-                        b_plot = np.linspace(self.b_[i] - 10, self.b_[i] + 10, 200)
-                        self.mb_objs_ = np.zeros((500, 200))
-                        for mix in range(500):
-                            for bix in range(200):
-                                with torch.no_grad():
-                                    self.mb_objs_[mix, bix] = reverse_kl_obj(
-                                        torch.tensor([m_plot[mix], b_plot[bix]])
-                                    ).numpy()
-                        self.m_plot_ = m_plot
-                        self.b_plot_ = b_plot
-                self.M_ = np.diag(self.m_)
-            else:
-                raise ValueError(f"divergence: {self.divergence}")
+            assert self.model_type in (
+                "linear",
+                "homoscedastic-gp",
+                "heteroscedastic-gp",
+            )
+            self.M_, self.b_, debug_tuple = run_kl_independent(
+                S=S,
+                T=T,
+                X_S=X_S,
+                X_T=X_T,
+                Xtest=Xtest,
+                model_type=self.model_type,
+                divergence=self.divergence,
+                multi_confounder_kernel=self.multi_confounder_kernel,
+                debug=self.debug,
+                verbose=self.verbose,
+                **self.optim_kwargs,
+            )
+            if debug_tuple is not None:
+                (self.m_plot_, self.b_plot_, self.mb_objs_) = debug_tuple
+            return self
 
         return self
 
