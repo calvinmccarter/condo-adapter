@@ -56,6 +56,7 @@ def run_mmd_independent(
         M: (num_feats, num_feats)
         b: (num_feats,)
     """
+    rng = np.random.RandomState(42)
     num_S = S.shape[0]
     num_T = T.shape[0]
     num_test = Xtest.shape[0]
@@ -106,13 +107,13 @@ def run_mmd_independent(
             objs = np.zeros(batches)
             for batch in range(batches):
                 tgtsample_ixs = [
-                    np.random.choice(
+                    rng.choice(
                         num_T, size=batch_size, replace=True, p=T_weights[:, cix]
                     ).tolist()
                     for cix in range(num_testu)
                 ]
                 srcsample_ixs = [
-                    np.random.choice(
+                    rng.choice(
                         num_S, size=batch_size, replace=True, p=S_weights[:, cix]
                     ).tolist()
                     for cix in range(num_testu)
@@ -230,13 +231,12 @@ def run_mmd_affine(
         M: (num_feats, num_feats)
         b: (num_feats,)
     """
+    rng = np.random.RandomState(42)
     num_S = S.shape[0]
     num_T = T.shape[0]
     num_test = Xtest.shape[0]
     num_feats = S.shape[1]
     num_confounders = X_S.shape[1]
-    M_ = np.eye(num_feats, num_feats)
-    b_ = np.zeros((1, num_feats))
     confounder_is_cat = (Xtest.dtype == bool) or not np.issubdtype(
         Xtest.dtype, np.number
     )
@@ -265,19 +265,26 @@ def run_mmd_affine(
     b = torch.zeros(num_feats, dtype=torch.float64, requires_grad=True)
     batches = round(num_S * num_T / (batch_size * batch_size))
     terms_per_batch = num_testu * batch_size * batch_size
+    obj_history = []
+    best_M = np.eye(num_feats, num_feats)
+    best_b = np.zeros(
+        num_feats,
+    )
     for epoch in range(epochs):
+        epoch_start_M = M.detach().numpy()
+        epoch_start_b = b.detach().numpy()
         Mz = torch.zeros(num_feats, num_feats)
         bz = torch.zeros(num_feats)
         objs = np.zeros(batches)
         for batch in range(batches):
             tgtsample_ixs = [
-                np.random.choice(
+                rng.choice(
                     num_T, size=batch_size, replace=True, p=T_weights[:, cix]
                 ).tolist()
                 for cix in range(num_testu)
             ]
             srcsample_ixs = [
-                np.random.choice(
+                rng.choice(
                     num_S, size=batch_size, replace=True, p=S_weights[:, cix]
                 ).tolist()
                 for cix in range(num_testu)
@@ -324,14 +331,24 @@ def run_mmd_affine(
             if verbose >= 2:
                 print(f"epoch:{epoch}/{epochs} batch:{batch}/{batches} obj:{obj:.5f}")
             objs[batch] = obj.detach().numpy()
-        if verbose >= 1:
-            print(
-                f"epoch:{epoch} {objs[0]:.5f}->{objs[-1]:.5f} avg:{np.mean(objs):.5f}"
-            )
 
-    M_ = M.detach().numpy()
-    b_ = b.detach().numpy()
-    return (M_, b_, None)
+        last_obj = np.mean(objs)
+        if verbose >= 1:
+            print(f"epoch:{epoch} {objs[0]:.5f}->{objs[-1]:.5f} avg:{last_obj:.5f}")
+
+        if epoch > 0 and last_obj < np.min(np.array(obj_history)):
+            best_M = epoch_start_M
+            best_b = epoch_start_b
+        if len(obj_history) >= 10:
+            if last_obj > np.max(np.array(obj_history[-10:])):
+                # Terminate early if worse than all previous 10 iterations
+                if verbose >= 1:
+                    print(
+                        f"Terminating {(alpha, beta)} after epoch {epoch}: {last_obj:.5f}"
+                    )
+                break
+        obj_history.append(last_obj)
+    return (best_M, best_b, None)
 
 
 def joint_linear_distr(
