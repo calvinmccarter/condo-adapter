@@ -555,7 +555,7 @@ def heteroscedastic_gp_distr(
                 ]
             )
             kernel = CatKernel() + HeteroscedasticCatKernel(noise_dict)
-            alpha = 0.0
+            alpha = 1e-3
             gper = GaussianProcessRegressor(
                 kernel=kernel,
                 alpha=alpha,
@@ -576,7 +576,7 @@ def heteroscedastic_gp_distr(
                 gamma=5.0,
                 gamma_bounds="fixed",
             )
-            alpha = 100.0
+            alpha = 1e-3
             gper = GaussianProcessRegressor(
                 kernel=kernel,
                 alpha=alpha,
