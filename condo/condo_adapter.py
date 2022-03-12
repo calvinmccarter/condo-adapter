@@ -565,8 +565,10 @@ def heteroscedastic_gp_distr(
         else:
             prototypes = KMeans(n_clusters=10).fit(X).cluster_centers_
             # hyperparams for HeteroscedasticKernel are from gp_extras-examples
-            kernel = ConstantKernel(1.0, (1e-3, 1e3)) * RBF(
-                1, (1e-2, 1e2)
+            # TODO: X - X.T will be incorrect with multiple confounders
+            min_ls = np.sqrt(np.mean((X - X.T) ** 2))
+            kernel = ConstantKernel(1, (1e-3, 1e3)) * RBF(
+                10 * min_ls, (min_ls, 100 * min_ls)
             ) + HeteroscedasticKernel.construct(
                 prototypes,
                 1e-3,
@@ -574,7 +576,7 @@ def heteroscedastic_gp_distr(
                 gamma=5.0,
                 gamma_bounds="fixed",
             )
-            alpha = 0.0
+            alpha = 100.0
             gper = GaussianProcessRegressor(
                 kernel=kernel,
                 alpha=alpha,
@@ -654,7 +656,6 @@ def homoscedastic_gp_distr(
                 alpha=alpha,
                 kernel=kernel,
                 normalize_y=False,
-                random_state=0,
                 n_restarts_optimizer=9,
             )
 
@@ -766,7 +767,10 @@ def run_kl_linear_affine(
         mb_opt = res.x.numpy()
         M_ = mb_opt[0:num_feats, :]  # (num_feats, num_feats)
         b_ = mb_opt[num_feats, :]  # (num_feats,)
-    return (M_, b_, None)
+    debug_dict = {}
+    debug_dict["predictor_T"] = predictor_T
+    debug_dict["predictor_S"] = predictor_S
+    return (M_, b_, debug_dict)
 
 
 def run_kl_independent(
@@ -789,7 +793,7 @@ def run_kl_independent(
     M_ = np.zeros((num_feats, num_feats))
     m_ = np.zeros(num_feats)
     b_ = np.zeros(num_feats)
-    debug_tuple = None
+    debug_dict = {}
     if model_type == "linear":
         (est_mu_T_all, est_sigma_T_all, predictor_T) = independent_linear_distr(
             D=T,
@@ -833,6 +837,8 @@ def run_kl_independent(
             multi_confounder_kernel=multi_confounder_kernel,
             verbose=verbose,
         )
+    debug_dict["predictor_T"] = predictor_T
+    debug_dict["predictor_S"] = predictor_S
 
     est_var_T_all = est_sigma_T_all**2
     est_var_S_all = est_sigma_S_all**2
@@ -881,27 +887,29 @@ def run_kl_independent(
             (m_[fix], b_[fix]) = res.x.numpy()
 
             if debug and fix == 0:
-                m_plot_ = np.geomspace(m_[fix] / 10, m_[fix] * 10, 500)
-                b_plot_ = np.linspace(b_[fix] - 10, b_[fix] + 10, 200)
-                mb_objs_ = np.zeros((500, 200))
+                m_plot = np.geomspace(m_[fix] / 10, m_[fix] * 10, 500)
+                b_plot = np.linspace(b_[fix] - 10, b_[fix] + 10, 200)
+                mb_objs = np.zeros((500, 200))
                 for mix in range(500):
                     for bix in range(200):
                         with torch.no_grad():
-                            mb_objs_[mix, bix] = forward_kl_obj(
-                                torch.tensor([m_plot_[mix], b_plot_[bix]])
+                            mb_objs[mix, bix] = forward_kl_obj(
+                                torch.tensor([m_plot[mix], b_plot[bix]])
                             ).numpy()
-                debug_tuple = (m_plot_, b_plot_, mb_objs_)
+                debug_dict["m_plot"] = m_plot
+                debug_dict["b_plot"] = b_plot
+                debug_dict["mb_objs"] = mb_objs
         M_ = np.diag(m_)
-        return (M_, b_, debug_tuple)
+        return (M_, b_, debug_dict)
 
     elif divergence == "reverse":
-        R_1 = 2 * np.mean(est_var_T_all, axis=0)
+        R_1 = -2 * np.mean(est_var_T_all, axis=0)
         R_2 = np.mean(est_var_S_all, axis=0)
         R_3 = np.mean(est_mu_S_all**2, axis=0)
         R_4 = 2 * np.mean(est_mu_S_all, axis=0)
-        R_5 = 2 * np.mean(est_mu_S_all * est_mu_T_all, axis=0)
+        R_5 = -2 * np.mean(est_mu_S_all * est_mu_T_all, axis=0)
         R_6 = np.ones(num_feats)
-        R_7 = 2 * np.mean(est_mu_T_all, axis=0)
+        R_7 = -2 * np.mean(est_mu_T_all, axis=0)
 
         # Loop over features since independent not joint
         for fix in range(num_feats):
@@ -918,13 +926,13 @@ def run_kl_independent(
             def reverse_kl_obj(mb):
                 m, b = mb[0], mb[1]
                 obj = (
-                    -2 * r_1 * torch.log(m)
+                    r_1 * torch.log(m)
                     + r_2 * (m**2)
                     + r_3 * (m**2)
                     + r_4 * m * b
-                    - r_5 * m
+                    + r_5 * m
                     + r_6 * (b**2)
-                    - r_7 * b
+                    + r_7 * b
                 )
                 return obj
 
@@ -938,18 +946,21 @@ def run_kl_independent(
             )
             (m_[fix], b_[fix]) = res.x.numpy()
             if debug and fix == 0:
-                m_plot_ = np.geomspace(m_[fix] / 10, m_[fix] * 10, 500)
-                b_plot_ = np.linspace(b_[fix] - 10, b_[fix] + 10, 200)
-                mb_objs_ = np.zeros((500, 200))
+                m_plot = np.geomspace(m_[fix] / 10, m_[fix] * 10, 500)
+                b_plot = np.linspace(b_[fix] - 10, b_[fix] + 10, 200)
+                mb_objs = np.zeros((500, 200))
                 for mix in range(500):
                     for bix in range(200):
                         with torch.no_grad():
-                            mb_objs_[mix, bix] = reverse_kl_obj(
+                            mb_objs[mix, bix] = reverse_kl_obj(
                                 torch.tensor([m_plot[mix], b_plot[bix]])
                             ).numpy()
-                debug_tuple = (m_plot_, b_plot_, mb_objs_)
+                debug_dict["m_plot"] = m_plot
+                debug_dict["b_plot"] = b_plot
+                debug_dict["mb_objs"] = mb_objs
+
         M_ = np.diag(m_)
-        return (M_, b_, debug_tuple)
+        return (M_, b_, debug_dict)
     else:
         assert False
 
@@ -1099,7 +1110,7 @@ class ConDoAdapter:
         num_test = Xtest.shape[0]
         if self.divergence == "mmd":
             if self.transform_type == "affine":
-                self.M_, self.b_, debug_tuple = run_mmd_affine(
+                self.M_, self.b_, self.debug_dict_ = run_mmd_affine(
                     S=S,
                     T=T,
                     X_S=X_S,
@@ -1110,7 +1121,7 @@ class ConDoAdapter:
                     **self.optim_kwargs,
                 )
             else:
-                self.M_, self.b_, debug_tuple = run_mmd_independent(
+                self.M_, self.b_, self.debug_dict_ = run_mmd_independent(
                     S=S,
                     T=T,
                     X_S=X_S,
@@ -1120,15 +1131,13 @@ class ConDoAdapter:
                     verbose=self.verbose,
                     **self.optim_kwargs,
                 )
-            if debug_tuple is not None:
-                (self.m_plot_, self.b_plot_, self.mb_objs_) = debug_tuple
             return self
 
         assert self.divergence in ("forward", "reverse")
 
         if self.transform_type == "affine" and num_feats > 1:
             assert self.model_type == "linear"
-            self.M_, self.b_, debug_tuple = run_kl_linear_affine(
+            self.M_, self.b_, self.debug_dict_ = run_kl_linear_affine(
                 S=S,
                 T=T,
                 X_S=X_S,
@@ -1139,8 +1148,6 @@ class ConDoAdapter:
                 verbose=self.verbose,
                 **self.optim_kwargs,
             )
-            if debug_tuple is not None:
-                (self.m_plot_, self.b_plot_, self.mb_objs_) = debug_tuple
             return self
 
         elif self.transform_type == "location-scale":
@@ -1150,7 +1157,7 @@ class ConDoAdapter:
                 "homoscedastic-gp",
                 "heteroscedastic-gp",
             )
-            self.M_, self.b_, debug_tuple = run_kl_independent(
+            self.M_, self.b_, self.debug_dict_ = run_kl_independent(
                 S=S,
                 T=T,
                 X_S=X_S,
@@ -1163,8 +1170,6 @@ class ConDoAdapter:
                 verbose=self.verbose,
                 **self.optim_kwargs,
             )
-            if debug_tuple is not None:
-                (self.m_plot_, self.b_plot_, self.mb_objs_) = debug_tuple
             return self
 
         return self
