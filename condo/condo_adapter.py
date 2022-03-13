@@ -1120,7 +1120,7 @@ class ConDoAdapter:
                     verbose=self.verbose,
                     **self.optim_kwargs,
                 )
-            else:
+            elif self.transform_type == "location-scale":
                 self.M_, self.b_, self.debug_dict_ = run_mmd_independent(
                     S=S,
                     T=T,
@@ -1131,46 +1131,45 @@ class ConDoAdapter:
                     verbose=self.verbose,
                     **self.optim_kwargs,
                 )
-            return self
+            else:
+                assert False
+        else:
+            assert self.divergence in ("forward", "reverse")
+            if self.transform_type == "affine" and num_feats > 1:
+                assert self.model_type == "linear"
+                self.M_, self.b_, self.debug_dict_ = run_kl_linear_affine(
+                    S=S,
+                    T=T,
+                    X_S=X_S,
+                    X_T=X_T,
+                    Xtest=Xtest,
+                    divergence=self.divergence,
+                    debug=self.debug,
+                    verbose=self.verbose,
+                    **self.optim_kwargs,
+                )
+            elif self.transform_type == "location-scale":
+                # location-scale transformation treats features independently
+                assert self.model_type in (
+                    "linear",
+                    "homoscedastic-gp",
+                    "heteroscedastic-gp",
+                )
+                self.M_, self.b_, self.debug_dict_ = run_kl_independent(
+                    S=S,
+                    T=T,
+                    X_S=X_S,
+                    X_T=X_T,
+                    Xtest=Xtest,
+                    model_type=self.model_type,
+                    divergence=self.divergence,
+                    multi_confounder_kernel=self.multi_confounder_kernel,
+                    debug=self.debug,
+                    verbose=self.verbose,
+                    **self.optim_kwargs,
+                )
 
-        assert self.divergence in ("forward", "reverse")
-
-        if self.transform_type == "affine" and num_feats > 1:
-            assert self.model_type == "linear"
-            self.M_, self.b_, self.debug_dict_ = run_kl_linear_affine(
-                S=S,
-                T=T,
-                X_S=X_S,
-                X_T=X_T,
-                Xtest=Xtest,
-                divergence=self.divergence,
-                debug=self.debug,
-                verbose=self.verbose,
-                **self.optim_kwargs,
-            )
-            return self
-
-        elif self.transform_type == "location-scale":
-            # location-scale transformation treats features independently
-            assert self.model_type in (
-                "linear",
-                "homoscedastic-gp",
-                "heteroscedastic-gp",
-            )
-            self.M_, self.b_, self.debug_dict_ = run_kl_independent(
-                S=S,
-                T=T,
-                X_S=X_S,
-                X_T=X_T,
-                Xtest=Xtest,
-                model_type=self.model_type,
-                divergence=self.divergence,
-                multi_confounder_kernel=self.multi_confounder_kernel,
-                debug=self.debug,
-                verbose=self.verbose,
-                **self.optim_kwargs,
-            )
-            return self
+        self.M_inv_ = np.linalg.inv(self.M_)
 
         return self
 
@@ -1183,3 +1182,10 @@ class ConDoAdapter:
         # self.b_.reshape(1, -1) has shape (1, num_feats)
         adaptedS = S @ self.M_.T + self.b_.reshape(1, -1)
         return adaptedS
+
+    def inverse_transform(
+        self,
+        T,
+    ):
+        adaptedT = (T - self.b_.reshape(1, -1)) @ self.M_inv_.T
+        return adaptedT

@@ -379,6 +379,10 @@ class MMDAdapter:
                 **self.optim_kwargs,
             )
 
+        self.M_inv_ = np.linalg.inv(self.M_)
+
+        return self
+
     def transform(
         self,
         S,
@@ -388,3 +392,10 @@ class MMDAdapter:
         # self.b_.reshape(1, -1) has shape (1, num_feats)
         adaptedS = S @ self.M_.T + self.b_.reshape(1, -1)
         return adaptedS
+
+    def inverse_transform(
+        self,
+        T,
+    ):
+        adaptedT = (T - self.b_.reshape(1, -1)) @ self.M_inv_.T
+        return adaptedT
