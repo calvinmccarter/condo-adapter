@@ -450,9 +450,23 @@ def joint_linear_distr(
         remainder="passthrough",
     )
     XandXtest_df = pd.DataFrame(np.vstack([X, Xtest]))
+    X_df = pd.DataFrame(X)
+    Xtest_df = pd.DataFrame(Xtest)
+    XandXtest_df = XandXtest_df.convert_dtypes()
+    X_df = X_df.convert_dtypes()
+    Xtest_df = Xtest_df.convert_dtypes()
+    # TODO: classify bool as categorical
+    cat_columns = [
+        col
+        for col in XandXtest_df.columns
+        if not pd.api.types.is_numeric_dtype(XandXtest_df[col])
+    ]
+    XandXtest_df[cat_columns] = XandXtest_df[cat_columns].astype("category")
+    X_df[cat_columns] = X_df[cat_columns].astype("category")
+    Xtest_df[cat_columns] = Xtest_df[cat_columns].astype("category")
     oher.fit(XandXtest_df)
-    encodedX = oher.transform(pd.DataFrame(X))
-    encodedXtest = oher.transform(pd.DataFrame(Xtest))
+    encodedX = oher.transform(X_df)
+    encodedXtest = oher.transform(Xtest_df)
 
     ridger = RidgeCV(alpha_per_target=True)
     ridger.fit(encodedX, D)
@@ -462,7 +476,8 @@ def joint_linear_distr(
     glassoer.fit(residD)
 
     est_Sigma = glassoer.covariance_
-    est_mus = ridger.predict(Xtest)
+    predDtest = ridger.predict(encodedXtest)
+    est_mus = predDtest
     predictor = ridger
     return (est_mus, est_Sigma, predictor)
 
@@ -495,9 +510,23 @@ def independent_linear_distr(
         remainder="passthrough",
     )
     XandXtest_df = pd.DataFrame(np.vstack([X, Xtest]))
+    X_df = pd.DataFrame(X)
+    Xtest_df = pd.DataFrame(Xtest)
+    XandXtest_df = XandXtest_df.convert_dtypes()
+    X_df = X_df.convert_dtypes()
+    Xtest_df = Xtest_df.convert_dtypes()
+    # TODO: classify bool as categorical
+    cat_columns = [
+        col
+        for col in XandXtest_df.columns
+        if not pd.api.types.is_numeric_dtype(XandXtest_df[col])
+    ]
+    XandXtest_df[cat_columns] = XandXtest_df[cat_columns].astype("category")
+    X_df[cat_columns] = X_df[cat_columns].astype("category")
+    Xtest_df[cat_columns] = Xtest_df[cat_columns].astype("category")
     oher.fit(XandXtest_df)
-    encodedX = oher.transform(pd.DataFrame(X))
-    encodedXtest = oher.transform(pd.DataFrame(Xtest))
+    encodedX = oher.transform(X_df)
+    encodedXtest = oher.transform(Xtest_df)
 
     ridger = RidgeCV(alpha_per_target=True)
     ridger.fit(encodedX, D)
@@ -680,6 +709,10 @@ def run_kl_linear_affine(
     verbose: Union[bool, int],
     max_iter: int = 50,
 ):
+    num_test = Xtest.shape[0]
+    num_feats = S.shape[1]
+    num_confounders = X_S.shape[1]
+
     m_ = None
     M_ = np.eye(num_feats, num_feats)
     b_ = np.zeros((1, num_feats))
