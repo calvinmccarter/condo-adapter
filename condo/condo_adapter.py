@@ -1,6 +1,7 @@
 from copy import deepcopy
 from typing import Union
 
+import math
 import numpy as np
 import pandas as pd
 import torch
@@ -337,17 +338,23 @@ def run_mmd_affine(
     M = torch.eye(num_feats, num_feats, dtype=torch.float64, requires_grad=True)
     b = torch.zeros(num_feats, dtype=torch.float64, requires_grad=True)
     batches = round(num_S * num_T / (batch_size * batch_size))
+    full_epochs = math.floor(epochs)
+    frac_epochs = epochs % 1
     terms_per_batch = num_testu * batch_size * batch_size
     obj_history = []
     best_M = np.eye(num_feats, num_feats)
     best_b = np.zeros(num_feats)
-    for epoch in range(epochs):
+    for epoch in range(full_epochs + 1):
         epoch_start_M = M.detach().numpy()
         epoch_start_b = b.detach().numpy()
         Mz = torch.zeros(num_feats, num_feats)
         bz = torch.zeros(num_feats)
         objs = np.zeros(batches)
-        for batch in range(batches):
+        if epoch == full_epochs:
+            cur_batches = round(frac_epochs * batches)
+        else:
+            cur_batches = batches
+        for batch in range(cur_batches):
             tgtsample_ixs = [
                 rng.choice(
                     num_T, size=batch_size, replace=True, p=T_weights[:, cix]
@@ -400,7 +407,9 @@ def run_mmd_affine(
             M.grad.zero_()
             b.grad.zero_()
             if verbose >= 2:
-                print(f"epoch:{epoch}/{epochs} batch:{batch}/{batches} obj:{obj:.5f}")
+                print(
+                    f"epoch:{epoch}/{epochs} batch:{batch}/{cur_batches} obj:{obj:.5f}"
+                )
             objs[batch] = obj.detach().numpy()
 
         last_obj = np.mean(objs)
@@ -410,6 +419,9 @@ def run_mmd_affine(
         if epoch > 0 and last_obj < np.min(np.array(obj_history)):
             best_M = epoch_start_M
             best_b = epoch_start_b
+        if epoch == full_epochs:
+            best_M = M.detach().numpy()
+            best_b = b.detach().numpy()
         if len(obj_history) >= 10:
             if last_obj > np.max(np.array(obj_history[-10:])):
                 # Terminate early if worse than all previous 10 iterations
@@ -440,6 +452,7 @@ def joint_linear_distr(
         predictor: sklearn model predicting D given X
     """
     num_test = Xtest.shape[0]
+    num_D = D.shape[0]
     num_feats = D.shape[1]
 
     oher = make_column_transformer(
@@ -472,10 +485,12 @@ def joint_linear_distr(
     ridger.fit(encodedX, D)
     predD = ridger.predict(encodedX)
     residD = predD - D
-    glassoer = GraphicalLassoCV(verbose=verbose)
-    glassoer.fit(residD)
-
-    est_Sigma = glassoer.covariance_
+    if num_D < 20 * (num_feats**2):
+        glassoer = GraphicalLassoCV(verbose=verbose)
+        glassoer.fit(residD)
+        est_Sigma = glassoer.covariance_
+    else:
+        est_Sigma = np.cov(residD, rowvar=False) + 1e-4 * np.eye(num_feats)
     predDtest = ridger.predict(encodedXtest)
     est_mus = predDtest
     predictor = ridger
@@ -716,22 +731,26 @@ def run_kl_linear_affine(
     m_ = None
     M_ = np.eye(num_feats, num_feats)
     b_ = np.zeros((1, num_feats))
+
+    (Xtestu, Xtestu_counts) = np.unique(Xtest, axis=0, return_counts=True)
+    num_testu = Xtestu.shape[0]
+
     (est_mu_T_all, est_Sigma_T, predictor_T) = joint_linear_distr(
         D=T,
         X=X_T,
-        Xtest=Xtest,
+        Xtest=Xtestu,
         verbose=verbose,
     )
-    Est_mu_T_all = [torch.from_numpy(est_mu_T_all[[i], :].T) for i in range(num_test)]
+    Est_mu_T_all = [torch.from_numpy(est_mu_T_all[[i], :].T) for i in range(num_testu)]
     Est_Sigma_T = torch.from_numpy(est_Sigma_T)
     Est_inv_Sigma_T = torch.from_numpy(np.linalg.inv(est_Sigma_T))
     (est_mu_S_all, est_Sigma_S, predictor_S) = joint_linear_distr(
         D=S,
         X=X_S,
-        Xtest=Xtest,
+        Xtest=Xtestu,
         verbose=verbose,
     )
-    Est_mu_S_all = [torch.from_numpy(est_mu_S_all[[i], :].T) for i in range(num_test)]
+    Est_mu_S_all = [torch.from_numpy(est_mu_S_all[[i], :].T) for i in range(num_testu)]
     Est_Sigma_S = torch.from_numpy(est_Sigma_S)
 
     if divergence == "forward":
@@ -749,10 +768,10 @@ def run_kl_linear_affine(
                 MSMTinv,
             )
             # obj += num_test * 1e-8 * torch.sum(M ** 2)
-            for n in range(num_test):
+            for n in range(num_testu):
                 # err_n has size (num_feats, 1)
                 err_n = M @ Est_mu_S_all[n] + b - Est_mu_T_all[n]
-                obj += (err_n.T @ MSMTinv @ err_n).squeeze()
+                obj += Xtestu_counts[n] * (err_n.T @ MSMTinv @ err_n).squeeze()
             return obj
 
         mb_init = torch.from_numpy(np.vstack([M_, b_]))
@@ -783,10 +802,10 @@ def run_kl_linear_affine(
             )
             # obj += num_test * 1e-8 * torch.sum(M ** 2)
             # obj += -10 * torch.sum(torch.clamp(M, min=float('-inf'), max=0))
-            for n in range(num_test):
+            for n in range(num_testu):
                 # err_n has size (num_feats, 1)
                 err_n = M @ Est_mu_S_all[n] + b - Est_mu_T_all[n]
-                obj += (err_n.T @ Est_inv_Sigma_T @ err_n).squeeze()
+                obj += Xtestu_counts[n] * (err_n.T @ Est_inv_Sigma_T @ err_n).squeeze()
             return obj
 
         mb_init = torch.from_numpy(np.vstack([M_, b_]))
