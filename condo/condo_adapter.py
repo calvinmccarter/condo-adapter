@@ -92,6 +92,8 @@ def run_mmd_independent(
     S_torch = torch.from_numpy(S)
 
     batches = round(num_S * num_T / (batch_size * batch_size))
+    full_epochs = math.floor(epochs)
+    frac_epochs = epochs % 1
     terms_per_batch = num_testu * batch_size * batch_size
     debug_tuple = None
 
@@ -103,14 +105,18 @@ def run_mmd_independent(
         best_M = np.eye(1, 1)
         best_b = np.zeros(1)
 
-        for epoch in range(epochs):
+        for epoch in range(full_epochs + 1):
             epoch_start_M = M.detach().numpy()
             epoch_start_b = b.detach().numpy()
             Mz = torch.zeros(1, 1)
             bz = torch.zeros(1)
 
             objs = np.zeros(batches)
-            for batch in range(batches):
+            if epoch == full_epochs:
+                cur_batches = round(frac_epochs * batches)
+            else:
+                cur_batches = batches
+            for batch in range(cur_batches):
                 tgtsample_ixs = [
                     rng.choice(
                         num_T, size=batch_size, replace=True, p=T_weights[:, cix]
@@ -174,12 +180,16 @@ def run_mmd_independent(
                         f"epoch:{epoch}/{epochs} batch:{batch}/{batches} obj:{obj:.5f}"
                     )
                 objs[batch] = obj.detach().numpy()
+
             last_obj = np.mean(objs)
             if verbose >= 1:
                 print(f"epoch:{epoch} {objs[0]:.5f}->{objs[-1]:.5f} avg:{last_obj:.5f}")
             if epoch > 0 and last_obj < np.min(np.array(obj_history)):
                 best_M = epoch_start_M
                 best_b = epoch_start_b
+            if epoch == full_epochs and full_epochs == 0:
+                best_M = M.detach().numpy()
+                best_b = b.detach().numpy()
             if len(obj_history) >= 10:
                 if last_obj > np.max(np.array(obj_history[-10:])):
                     # Terminate early if worse than all previous 10 iterations
@@ -415,11 +425,10 @@ def run_mmd_affine(
         last_obj = np.mean(objs)
         if verbose >= 1:
             print(f"epoch:{epoch} {objs[0]:.5f}->{objs[-1]:.5f} avg:{last_obj:.5f}")
-
         if epoch > 0 and last_obj < np.min(np.array(obj_history)):
             best_M = epoch_start_M
             best_b = epoch_start_b
-        if epoch == full_epochs:
+        if epoch == full_epochs and full_epochs == 0:
             best_M = M.detach().numpy()
             best_b = b.detach().numpy()
         if len(obj_history) >= 10:
