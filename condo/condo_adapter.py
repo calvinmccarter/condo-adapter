@@ -639,7 +639,6 @@ def heteroscedastic_gp_distr(
 
         gper.fit(X, D[:, fix])
 
-        # TODO: make faster when Xtest rows are not unique
         (est_mu, est_sigma) = gper.predict(Xtest, return_std=True)
         est_mus[:, fix] = est_mu
         est_sigmas[:, fix] = est_sigma
@@ -714,7 +713,6 @@ def homoscedastic_gp_distr(
 
         gper.fit(X, D[:, fix])
 
-        # TODO: make faster when Xtest rows are not unique
         (est_mu, est_sigma) = gper.predict(Xtest, return_std=True)
         est_mus[:, fix] = est_mu
         est_sigmas[:, fix] = est_sigma
@@ -850,6 +848,10 @@ def run_kl_independent(
 ):
     num_feats = S.shape[1]
     num_confounders = X_S.shape[1]
+    (Xtestu, Xtestu_ixs, Xtestu_counts) = np.unique(
+        Xtest, axis=0, return_inverse=True, return_counts=True
+    )
+    num_testu = Xtestu.shape[0]
 
     M_ = np.zeros((num_feats, num_feats))
     m_ = np.zeros(num_feats)
@@ -859,27 +861,27 @@ def run_kl_independent(
         (est_mu_T_all, est_sigma_T_all, predictor_T) = independent_linear_distr(
             D=T,
             X=X_T,
-            Xtest=Xtest,
+            Xtest=Xtestu,
             verbose=verbose,
         )
         (est_mu_S_all, est_sigma_S_all, predictor_S) = independent_linear_distr(
             D=S,
             X=X_S,
-            Xtest=Xtest,
+            Xtest=Xtestu,
             verbose=verbose,
         )
     elif model_type == "homoscedastic-gp":
         (est_mu_T_all, est_sigma_T_all, predictor_T) = homoscedastic_gp_distr(
             D=T,
             X=X_T,
-            Xtest=Xtest,
+            Xtest=Xtestu,
             multi_confounder_kernel=multi_confounder_kernel,
             verbose=verbose,
         )
         (est_mu_S_all, est_sigma_S_all, predictor_S) = homoscedastic_gp_distr(
             D=S,
             X=X_S,
-            Xtest=Xtest,
+            Xtest=Xtestu,
             multi_confounder_kernel=multi_confounder_kernel,
             verbose=verbose,
         )
@@ -887,17 +889,22 @@ def run_kl_independent(
         (est_mu_T_all, est_sigma_T_all, predictor_T) = heteroscedastic_gp_distr(
             D=T,
             X=X_T,
-            Xtest=Xtest,
+            Xtest=Xtestu,
             multi_confounder_kernel=multi_confounder_kernel,
             verbose=verbose,
         )
         (est_mu_S_all, est_sigma_S_all, predictor_S) = heteroscedastic_gp_distr(
             D=S,
             X=X_S,
-            Xtest=Xtest,
+            Xtest=Xtestu,
             multi_confounder_kernel=multi_confounder_kernel,
             verbose=verbose,
         )
+    est_mu_T_all = est_mu_T_all[Xtestu_ixs, :]
+    est_mu_S_all = est_mu_S_all[Xtestu_ixs, :]
+    est_sigma_T_all = est_sigma_T_all[Xtestu_ixs, :]
+    est_sigma_S_all = est_sigma_S_all[Xtestu_ixs, :]
+
     debug_dict["predictor_T"] = predictor_T
     debug_dict["predictor_S"] = predictor_S
 
