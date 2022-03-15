@@ -95,7 +95,8 @@ def run_mmd_independent(
     full_epochs = math.floor(epochs)
     frac_epochs = epochs % 1
     terms_per_batch = num_testu * batch_size * batch_size
-    debug_tuple = None
+    debug_dict = {}
+    debug_dict["mbos"] = []
 
     for fix in range(num_feats):
         M = torch.eye(1, 1, dtype=torch.float64, requires_grad=True)
@@ -116,7 +117,10 @@ def run_mmd_independent(
                 cur_batches = round(frac_epochs * batches)
             else:
                 cur_batches = batches
+            if debug:
+                mbos = np.zeros((cur_batches, 3))
             for batch in range(cur_batches):
+
                 tgtsample_ixs = [
                     rng.choice(
                         num_T, size=batch_size, replace=True, p=T_weights[:, cix]
@@ -165,6 +169,12 @@ def run_mmd_independent(
                             )
                         )
                     )
+                if debug:
+                    mbos[batch, :] = (
+                        M.detach().numpy()[0, 0],
+                        b.detach().numpy()[0],
+                        obj.detach().numpy(),
+                    )
 
                 obj.backward()
                 with torch.no_grad():
@@ -182,6 +192,8 @@ def run_mmd_independent(
                 objs[batch] = obj.detach().numpy()
 
             last_obj = np.mean(objs)
+            if debug:
+                debug_dict["mbos"].append(mbos)
             if verbose >= 1:
                 print(f"epoch:{epoch} {objs[0]:.5f}->{objs[-1]:.5f} avg:{last_obj:.5f}")
             if epoch > 0 and last_obj < np.min(np.array(obj_history)):
@@ -200,69 +212,8 @@ def run_mmd_independent(
 
         M_[fix, fix] = best_M
         b_[fix] = best_b
-        if debug and fix == 0:
 
-            def mmd_obj(cur_m, cur_b):
-                tgtsample_ixs = [
-                    rng.choice(
-                        num_T, size=100, replace=True, p=T_weights[:, cix]
-                    ).tolist()
-                    for cix in range(num_testu)
-                ]
-                srcsample_ixs = [
-                    rng.choice(
-                        num_S, size=100, replace=True, p=S_weights[:, cix]
-                    ).tolist()
-                    for cix in range(num_testu)
-                ]
-                obj = torch.tensor(0.0)
-                for cix in range(num_testu):
-                    Tsample = (T_torch[tgtsample_ixs[cix], fix]).reshape(-1, 1)
-                    adaptedSsample = (S_torch[srcsample_ixs[cix], fix]).reshape(
-                        -1, 1
-                    ) @ M.T + b.reshape(1, -1)
-                    length_scale = (
-                        torch.mean((Tsample - adaptedSsample) ** 2).detach().numpy()
-                    )
-                    factor = Xtestu_counts[cix] / terms_per_batch
-                    obj = obj - 2 * factor * torch.sum(
-                        torch.exp(
-                            -1.0
-                            / (2 * length_scale)
-                            * (
-                                (Tsample @ Tsample.T).diag().unsqueeze(1)
-                                - 2 * Tsample @ adaptedSsample.T
-                                + (adaptedSsample @ adaptedSsample.T)
-                                .diag()
-                                .unsqueeze(0)
-                            )
-                        )
-                    )
-                    obj = obj + factor * torch.sum(
-                        torch.exp(
-                            -1.0
-                            / (2 * length_scale)
-                            * (
-                                (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(1)
-                                - 2 * adaptedSsample @ adaptedSsample.T
-                                + (adaptedSsample @ adaptedSsample.T)
-                                .diag()
-                                .unsqueeze(0)
-                            )
-                        )
-                    )
-                return obj.detach().numpy()
-
-            m_plot = np.geomspace(M_[fix, fix] / 10, M_[fix, fix] * 10, 70)
-            b_plot = np.linspace(b_[fix] - 10, b_[fix] + 10, 40)
-            mb_objs = np.zeros((70, 40))
-            for mix in range(70):
-                for bix in range(40):
-                    with torch.no_grad():
-                        mb_objs[mix, bix] = mmd_obj(m_plot[mix], b_plot[bix])
-            debug_tuple = (m_plot, b_plot, mb_objs)
-
-    return (M_, b_, debug_tuple)
+    return (M_, b_, debug_dict)
 
 
 def run_mmd_affine(
