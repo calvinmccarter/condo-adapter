@@ -1,6 +1,7 @@
 from copy import deepcopy
 from typing import Union
 
+import math
 import numpy as np
 import pandas as pd
 import torch
@@ -64,7 +65,7 @@ def run_mmd_independent(
     T_torch = torch.from_numpy(T)
     S_torch = torch.from_numpy(S)
 
-    batches = round(num_S * num_T / (batch_size * batch_size))
+    batches = math.ceil(num_S * num_T / (batch_size * batch_size))
     terms_per_batch = batch_size * batch_size
     debug_tuple = None
 

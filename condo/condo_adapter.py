@@ -98,7 +98,7 @@ def run_mmd_independent(
     T_torch = torch.from_numpy(T)
     S_torch = torch.from_numpy(S)
 
-    batches = round(num_S * num_T / (batch_size * batch_size))
+    batches = math.ceil(num_S * num_T / (batch_size * batch_size))
     full_epochs = math.floor(epochs)
     frac_epochs = epochs % 1
     terms_per_batch = num_testu * batch_size * batch_size
