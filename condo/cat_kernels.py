@@ -45,9 +45,10 @@ class CatKernel(GenericKernelMixin, Kernel):
 
 
 class HeteroscedasticCatKernel(GenericKernelMixin, Kernel):
-    def __init__(self, noise_dict):
+    def __init__(self, noise_dict, missing_noise):
         # XXX - make these hyperparameters fixed
         self.noise_dict = noise_dict
+        self.missing_noise = missing_noise
 
     def __call__(self, X, Y=None, eval_gradient=False):
         if Y is not None and eval_gradient:
@@ -72,4 +73,4 @@ class HeteroscedasticCatKernel(GenericKernelMixin, Kernel):
         return False
 
     def diag(self, X):
-        return np.array([self.noise_dict[x.item()] for x in X])
+        return np.array([self.noise_dict.get(x.item(), self.missing_noise) for x in X])

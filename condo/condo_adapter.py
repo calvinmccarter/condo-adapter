@@ -15,6 +15,7 @@ from sklearn.covariance import GraphicalLassoCV
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import (
     ConstantKernel,
+    Kernel,
     RBF,
     WhiteKernel,
 )
@@ -36,6 +37,7 @@ def run_mmd_independent(
     Xtest: np.ndarray,
     debug: bool,
     verbose: Union[bool, int],
+    custom_kernel,
     epochs: int = 100,
     batch_size: int = 16,
     alpha: float = 1e-2,
@@ -69,21 +71,26 @@ def run_mmd_independent(
     confounder_is_cat = (Xtest.dtype == bool) or not np.issubdtype(
         Xtest.dtype, np.number
     )
-    if num_confounders != 1:
-        # TODO: handle multiple confounders
-        raise NotImplementedError(f"MMD affine num_confounders:{num_confounders}")
-
+    # TODO: handle confounders of different dtypes
     if confounder_is_cat:
-        target_kernel = CatKernel()
-        source_kernel = CatKernel()
         (Xtestu, Xtestu_counts) = np.unique(Xtest, axis=0, return_counts=True)
         num_testu = Xtestu.shape[0]
     else:
-        target_kernel = 1.0 * RBF(length_scale=np.std(X_S))
-        source_kernel = 1.0 * RBF(length_scale=np.std(X_T))
         Xtestu = Xtest
         num_testu = num_test
         Xtestu_counts = np.ones(num_testu)
+
+    if custom_kernel is not None:
+        target_kernel = custom_kernel()
+        source_kernel = custom_kernel()
+    else:
+        if confounder_is_cat:
+            target_kernel = CatKernel()
+            source_kernel = CatKernel()
+        else:
+            target_kernel = 1.0 * RBF(length_scale=np.std(X_S, axis=0))
+            source_kernel = 1.0 * RBF(length_scale=np.std(X_T, axis=0))
+
     target_similarities = target_kernel(X_T, Xtestu)  # (num_T, num_testu)
     T_weights = target_similarities / np.sum(target_similarities, axis=0, keepdims=True)
     source_similarities = source_kernel(X_S, Xtestu)  # (num_T, num_testu)
@@ -222,6 +229,7 @@ def run_mmd_affine(
     X_S: np.ndarray,
     X_T: np.ndarray,
     Xtest: np.ndarray,
+    custom_kernel,
     debug: bool,
     verbose: Union[bool, int],
     epochs: int = 100,
@@ -257,38 +265,26 @@ def run_mmd_affine(
     confounder_is_cat = (Xtest.dtype == bool) or not np.issubdtype(
         Xtest.dtype, np.number
     )
-    if num_confounders != 1:
-        # TODO: handle multiple confounders
-        raise NotImplementedError(f"MMD affine num_confounders:{num_confounders}")
-
+    # TODO: handle confounders of different dtypes
     if confounder_is_cat:
-        # TODO- this did not work, not sure why
-        """
-        S_noise_dict = dict(
-            [
-                (catname, np.var(S[np.where(X_S[:, 0] == catname), :]))
-                for catname in list(set(list(X_S[:, 0])))
-            ]
-        )
-        source_kernel = CatKernel() + HeteroscedasticCatKernel(S_noise_dict)
-        T_noise_dict = dict(
-            [
-                (catname, np.var(T[np.where(X_T[:, 0] == catname), :]))
-                for catname in list(set(list(X_T[:, 0])))
-            ]
-        )
-        target_kernel = CatKernel() + HeteroscedasticCatKernel(T_noise_dict)
-        """
-        target_kernel = CatKernel()
-        source_kernel = CatKernel()
         (Xtestu, Xtestu_counts) = np.unique(Xtest, axis=0, return_counts=True)
         num_testu = Xtestu.shape[0]
     else:
-        target_kernel = 1.0 * RBF(length_scale=np.std(X_S))
-        source_kernel = 1.0 * RBF(length_scale=np.std(X_T))
         Xtestu = Xtest
         num_testu = num_test
         Xtestu_counts = np.ones(num_testu)
+
+    if custom_kernel is not None:
+        target_kernel = custom_kernel()
+        source_kernel = custom_kernel()
+    else:
+        if confounder_is_cat:
+            target_kernel = CatKernel()
+            source_kernel = CatKernel()
+        else:
+            target_kernel = 1.0 * RBF(length_scale=np.std(X_S, axis=0))
+            source_kernel = 1.0 * RBF(length_scale=np.std(X_T, axis=0))
+
     target_similarities = target_kernel(X_T, Xtestu)  # (num_T, num_testu)
     T_weights = target_similarities / np.sum(target_similarities, axis=0, keepdims=True)
     source_similarities = source_kernel(X_S, Xtestu)  # (num_T, num_testu)
@@ -521,7 +517,7 @@ def heteroscedastic_gp_distr(
     D: np.ndarray,
     X: np.ndarray,
     Xtest: np.ndarray,
-    multi_confounder_kernel: str = "sum",
+    custom_kernel,
     verbose: Union[bool, int] = 1,
 ):
     """
@@ -529,7 +525,7 @@ def heteroscedastic_gp_distr(
         D: (num_train, num_feats)
         X: (num_train, num_confounders)
         Xtest: (num_test, num_confounders)
-        multi_confounder_kernel:
+        custom_kernel: None or Kernel
         verbose:
 
     Returns:
@@ -540,25 +536,30 @@ def heteroscedastic_gp_distr(
     num_test = Xtest.shape[0]
     num_feats = D.shape[1]
     num_confounders = X.shape[1]
-    if num_confounders > 1:
-        raise NotImplementedError(f"num_confounders {num_confounders}")
     confounder_is_cat = (X.dtype == bool) or not np.issubdtype(X.dtype, np.number)
-    if num_confounders != 1:
-        # TODO: handle multiple confounders
-        raise NotImplementedError(f"MMD affine num_confounders:{num_confounders}")
 
     est_mus = np.zeros((num_test, num_feats))
     est_sigmas = np.zeros((num_test, num_feats))
     for fix in range(num_feats):
-        if confounder_is_cat:
-            # Assumes X has single confounder
-            noise_dict = dict(
-                [
-                    (catname, np.var(D[np.where(X[:, 0] == catname), fix]))
-                    for catname in list(set(list(X[:, 0])))
-                ]
+        if custom_kernel is not None:
+            first_kernel = custom_kernel()
+        elif confounder_is_cat:
+            first_kernel = CatKernel()
+        else:
+            min_ls = np.sqrt(np.mean((X - X.T) ** 2))
+            first_kernel = ConstantKernel(1, (1e-3, 1e3)) * RBF(
+                10 * min_ls, (min_ls, 100 * min_ls)
             )
-            kernel = CatKernel() + HeteroscedasticCatKernel(noise_dict)
+        if confounder_is_cat:
+            noise_dict = {}
+            Xulist = list(np.unique(X, axis=0))
+            for Xuval in Xulist:
+                noise_dict[tuple(list(Xuval))] = (
+                    np.var(D[np.where(X == Xuval), :]) + 1e-2
+                )
+            kernel = first_kernel + HeteroscedasticCatKernel(
+                noise_dict, np.var(D[:, fix])
+            )
             alpha = 1e-3
             gper = GaussianProcessRegressor(
                 kernel=kernel,
@@ -570,10 +571,7 @@ def heteroscedastic_gp_distr(
             prototypes = KMeans(n_clusters=10).fit(X).cluster_centers_
             # hyperparams for HeteroscedasticKernel are from gp_extras-examples
             # TODO: X - X.T will be incorrect with multiple confounders
-            min_ls = np.sqrt(np.mean((X - X.T) ** 2))
-            kernel = ConstantKernel(1, (1e-3, 1e3)) * RBF(
-                10 * min_ls, (min_ls, 100 * min_ls)
-            ) + HeteroscedasticKernel.construct(
+            kernel = first_kernel + HeteroscedasticKernel.construct(
                 prototypes,
                 1e-3,
                 (1e-10, 50.0),
@@ -601,7 +599,7 @@ def homoscedastic_gp_distr(
     D: np.ndarray,
     X: np.ndarray,
     Xtest: np.ndarray,
-    multi_confounder_kernel: str = "sum",
+    custom_kernel,
     verbose: Union[bool, int] = 1,
 ):
     """
@@ -609,7 +607,7 @@ def homoscedastic_gp_distr(
         D: (num_train, num_feats)
         X: (num_train, num_confounders)
         Xtest: (num_test, num_confounders)
-        multi_confounder_kernel:
+        custom_kernel: None or Kernel
         verbose:
 
     Returns:
@@ -628,13 +626,17 @@ def homoscedastic_gp_distr(
     est_mus = np.zeros((num_test, num_feats))
     est_sigmas = np.zeros((num_test, num_feats))
     for fix in range(num_feats):
-        if confounder_is_cat:
-            kernel = CatKernel()
-            noise_dict = dict(
-                [(catname, np.var(D[:, fix])) for catname in list(set(list(X[:, 0])))]
+        if custom_kernel is not None:
+            kernel = custom_kernel()
+            alpha = 1e-3
+            gper = GaussianProcessRegressor(
+                kernel=kernel,
+                alpha=alpha,
+                normalize_y=False,
+                n_restarts_optimizer=9,
             )
-            kernel = CatKernel() + HeteroscedasticCatKernel(noise_dict)
-
+        elif confounder_is_cat:
+            kernel = CatKernel() + HeteroscedasticCatKernel({}, np.var(D[:, fix]))
             alpha = 1e-3
             gper = GaussianProcessRegressor(
                 kernel=kernel,
@@ -791,7 +793,7 @@ def run_kl_independent(
     Xtest: np.ndarray,
     model_type: str,
     divergence: str,
-    multi_confounder_kernel: str,
+    custom_kernel,
     debug: bool,
     verbose: Union[bool, int],
     method: str = "l-bfgs",
@@ -826,14 +828,14 @@ def run_kl_independent(
             D=T,
             X=X_T,
             Xtest=Xtestu,
-            multi_confounder_kernel=multi_confounder_kernel,
+            custom_kernel=custom_kernel,
             verbose=verbose,
         )
         (est_mu_S_all, est_sigma_S_all, predictor_S) = homoscedastic_gp_distr(
             D=S,
             X=X_S,
             Xtest=Xtestu,
-            multi_confounder_kernel=multi_confounder_kernel,
+            custom_kernel=custom_kernel,
             verbose=verbose,
         )
     elif model_type == "heteroscedastic-gp":
@@ -841,14 +843,14 @@ def run_kl_independent(
             D=T,
             X=X_T,
             Xtest=Xtestu,
-            multi_confounder_kernel=multi_confounder_kernel,
+            custom_kernel=custom_kernel,
             verbose=verbose,
         )
         (est_mu_S_all, est_sigma_S_all, predictor_S) = heteroscedastic_gp_distr(
             D=S,
             X=X_S,
             Xtest=Xtestu,
-            multi_confounder_kernel=multi_confounder_kernel,
+            custom_kernel=custom_kernel,
             verbose=verbose,
         )
     est_mu_T_all = est_mu_T_all[Xtestu_ixs, :]
@@ -990,8 +992,8 @@ class ConDoAdapter:
         sampling: str = "source",
         transform_type: str = "location-scale",
         model_type: str = "linear",
-        multi_confounder_kernel: str = "sum",
         divergence: Union[None, str] = "mmd",
+        custom_kernel=None,
         optim_kwargs: dict = None,
         verbose: Union[bool, int] = 1,
         debug: bool = False,
@@ -1015,9 +1017,7 @@ class ConDoAdapter:
                 Valid options are "mmd", "forward", "reverse".
                 The option "forward" corresponds to D_KL(target || source).
 
-            multi_confounder_kernel: How to construct a kernel from multiple
-                confounding variables ("sum", "product"). The default
-                is "sum" because this is less likely to overfit.
+            custom_kernel: None or a subclass of sklearn's Kernel.
 
             optim_kwargs: Dict containing args for optimization.
                 If mmd, valid keys are "epochs", "batch_size",
@@ -1042,10 +1042,6 @@ class ConDoAdapter:
             raise ValueError(f"invalid model_type: {model_type}")
         if divergence not in (None, "forward", "reverse", "mmd"):
             raise ValueError(f"invalid divergence: {divergence}")
-        if multi_confounder_kernel not in ("sum", "product"):
-            raise ValueError(
-                f"invalid multi_confounder_kernel: {multi_confounder_kernel}"
-            )
         if transform_type == "affine" and model_type not in ("linear", "empirical"):
             raise ValueError(
                 f"incompatible (transform_type, model_type): {(transform_type, model_type)}"
@@ -1054,12 +1050,17 @@ class ConDoAdapter:
             raise ValueError(
                 f"incompatible (model_type, divergence): {(model_type, divergence)}"
             )
+        if custom_kernel is not None:
+            if not issubclass(custom_kernel, Kernel):
+                raise ValueError("custom_kernel {custom_kernel} is not Kernel")
+        if model_type == "linear" and custom_kernel is not None:
+            print(f"Ignoring custom_kernel {custom_kernel} since linear model_type")
 
         self.sampling = sampling
         self.transform_type = transform_type
         self.model_type = model_type
-        self.multi_confounder_kernel = multi_confounder_kernel
         self.divergence = divergence
+        self.custom_kernel = custom_kernel
         self.optim_kwargs = deepcopy(optim_kwargs) or {}
         self.verbose = verbose
         self.debug = debug
@@ -1113,6 +1114,15 @@ class ConDoAdapter:
 
         num_feats = S.shape[1]
         num_confounders = X_S.shape[1]
+        if num_confounders == 0:
+            raise ValueError(f"called fit with num_confounders:{num_confounders}")
+        if self.model_type != "linear":
+            if num_confounders > 1 and self.custom_kernel is not None:
+                # TODO: handle multiple confounders even without custom_kernel
+                raise NotImplementedError(
+                    f"num_confounders:{num_confounders} requires linear model_type"
+                    f"or custom_kernel"
+                )
 
         if self.sampling == "source":
             Xtest = X_S
@@ -1135,6 +1145,7 @@ class ConDoAdapter:
                     X_S=X_S,
                     X_T=X_T,
                     Xtest=Xtest,
+                    custom_kernel=self.custom_kernel,
                     debug=self.debug,
                     verbose=self.verbose,
                     **self.optim_kwargs,
@@ -1146,6 +1157,7 @@ class ConDoAdapter:
                     X_S=X_S,
                     X_T=X_T,
                     Xtest=Xtest,
+                    custom_kernel=self.custom_kernel,
                     debug=self.debug,
                     verbose=self.verbose,
                     **self.optim_kwargs,
@@ -1182,7 +1194,7 @@ class ConDoAdapter:
                     Xtest=Xtest,
                     model_type=self.model_type,
                     divergence=self.divergence,
-                    multi_confounder_kernel=self.multi_confounder_kernel,
+                    custom_kernel=self.custom_kernel,
                     debug=self.debug,
                     verbose=self.verbose,
                     **self.optim_kwargs,
