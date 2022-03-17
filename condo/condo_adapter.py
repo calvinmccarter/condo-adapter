@@ -617,8 +617,6 @@ def homoscedastic_gp_distr(
     num_test = Xtest.shape[0]
     num_feats = D.shape[1]
     num_confounders = X.shape[1]
-    if num_confounders > 1:
-        raise NotImplementedError(f"num_confounders {num_confounders}")
     confounder_is_cat = (X.dtype == bool) or not np.issubdtype(X.dtype, np.number)
     if confounder_is_cat:
         print("warning: homoscedastic with categorical not recommended")
