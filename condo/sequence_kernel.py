@@ -1,3 +1,5 @@
+import numpy as np
+
 from sklearn.gaussian_process.kernels import Kernel, Hyperparameter
 from sklearn.gaussian_process.kernels import GenericKernelMixin
 from sklearn.gaussian_process import GaussianProcessRegressor
@@ -70,11 +72,13 @@ class SequenceKernelCol(GenericKernelMixin, Kernel):
         self.baseline_similarity = baseline_similarity
         self.baseline_similarity_bounds = baseline_similarity_bounds
 
+    """
     @property
     def hyperparameter_baseline_similarity(self):
         return Hyperparameter(
             "baseline_similarity", "numeric", self.baseline_similarity_bounds
         )
+    """
 
     def _f(self, s1, s2):
         """
@@ -98,10 +102,11 @@ class SequenceKernelCol(GenericKernelMixin, Kernel):
             Ycol = Y[:, self.col]
 
         if eval_gradient:
-            return (
+            ret = (
                 np.array([[self._f(x, y) for y in Ycol] for x in Xcol]),
                 np.array([[[self._g(x, y)] for y in Ycol] for x in Xcol]),
             )
+            return ret
         else:
             return np.array([[self._f(x, y) for y in Ycol] for x in Xcol])
 
