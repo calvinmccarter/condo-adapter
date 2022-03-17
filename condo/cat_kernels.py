@@ -44,6 +44,42 @@ class CatKernel(GenericKernelMixin, Kernel):
         return False
 
 
+class AdditiveCatKernel(GenericKernelMixin, Kernel):
+    def __init__(self):
+        # TODO- implement
+        pass
+
+    def _f(self, s1, s2):
+        """
+        kernel value between a pair of categories
+        """
+        return 1.0 if np.array_equal(s1, s2) else 0.0
+
+    def _g(self, s1, s2):
+        """
+        kernel derivative between a pair of categories
+        """
+        return 0.0 if np.array_equal(s1, s2) else 1.0
+
+    def __call__(self, X, Y=None, eval_gradient=False):
+        if Y is None:
+            Y = X
+
+        if eval_gradient:
+            return (
+                np.array([[self._f(x, y) for y in Y] for x in X]),
+                np.array([[[self._g(x, y)] for y in Y] for x in X]),
+            )
+        else:
+            return np.array([[self._f(x, y) for y in Y] for x in X])
+
+    def diag(self, X):
+        return np.array([self._f(x, x) for x in X])
+
+    def is_stationary(self):
+        return False
+
+
 class HeteroscedasticCatKernel(GenericKernelMixin, Kernel):
     def __init__(self, noise_dict, missing_noise):
         # XXX - make these hyperparameters fixed
@@ -73,4 +109,11 @@ class HeteroscedasticCatKernel(GenericKernelMixin, Kernel):
         return False
 
     def diag(self, X):
-        return np.array([self.noise_dict.get(x.item(), self.missing_noise) for x in X])
+        def get_noise(x):
+            try:
+                xitem = x.item()
+                return self.noise_dict.get(xitem, self.missing_noise)
+            except:
+                return self.missing_noise
+
+        return np.array([get_noise(x) for x in X])
