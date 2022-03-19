@@ -106,6 +106,8 @@ def run_mmd_independent(
     debug_dict["mbos"] = []
 
     for fix in range(num_feats):
+        if fix % (1 + num_feats // 100) == 0:
+            print(f"fix:{fix}/{num_feats}")
         M = torch.eye(1, 1, dtype=torch.float64, requires_grad=True)
         b = torch.zeros(1, dtype=torch.float64, requires_grad=True)
 
@@ -221,6 +223,190 @@ def run_mmd_independent(
         b_[fix] = best_b
 
     return (M_, b_, debug_dict)
+
+
+def run_mmd_independent_fast(
+    S: np.ndarray,
+    T: np.ndarray,
+    X_S: np.ndarray,
+    X_T: np.ndarray,
+    Xtest: np.ndarray,
+    custom_kernel,
+    debug: bool,
+    verbose: Union[bool, int],
+    epochs: int = 100,
+    batch_size: int = 16,
+    alpha: float = 1e-2,
+    beta: float = 0.9,
+):
+    """
+    Args:
+        debug: is ignored
+
+        epochs: number of times to pass through all observed confounder values.
+
+        batch_size: number of samples to draw from S and T per confounder value.
+            kernel matrix will be of size (batch_size, batch_size).
+            The number of batches per epoch is num_S*num_T / (batch_size ** 2).
+
+        alpha: gradient descent learning rate (ie step size).
+
+        beta: Nesterov momentum
+
+    Returns:
+        M: (num_feats, num_feats)
+        b: (num_feats,)
+        debug_tuple: (m_plot, b_plot, mb_objs) or None
+    """
+    print("running fast")
+    rng = np.random.RandomState(42)
+    num_S = S.shape[0]
+    num_T = T.shape[0]
+    num_test = Xtest.shape[0]
+    num_feats = S.shape[1]
+    num_confounders = X_S.shape[1]
+    confounder_is_cat = (Xtest.dtype == bool) or not np.issubdtype(
+        Xtest.dtype, np.number
+    )
+    # TODO: handle confounders of different dtypes
+    if confounder_is_cat:
+        (Xtestu, Xtestu_counts) = np.unique(Xtest, axis=0, return_counts=True)
+        num_testu = Xtestu.shape[0]
+    else:
+        Xtestu = Xtest
+        num_testu = num_test
+        Xtestu_counts = np.ones(num_testu)
+
+    if custom_kernel is not None:
+        target_kernel = custom_kernel()
+        source_kernel = custom_kernel()
+    else:
+        if confounder_is_cat:
+            target_kernel = CatKernel()
+            source_kernel = CatKernel()
+        else:
+            target_kernel = 1.0 * RBF(length_scale=np.std(X_S, axis=0))
+            source_kernel = 1.0 * RBF(length_scale=np.std(X_T, axis=0))
+
+    target_similarities = target_kernel(X_T, Xtestu)  # (num_T, num_testu)
+    T_weights = target_similarities / np.sum(target_similarities, axis=0, keepdims=True)
+    source_similarities = source_kernel(X_S, Xtestu)  # (num_T, num_testu)
+    S_weights = source_similarities / np.sum(source_similarities, axis=0, keepdims=True)
+    T_torch = torch.from_numpy(T)
+    S_torch = torch.from_numpy(S)
+
+    M = torch.ones(num_feats, dtype=torch.float64, requires_grad=True)
+    b = torch.zeros(num_feats, dtype=torch.float64, requires_grad=True)
+    batches = round(num_S * num_T / (batch_size * batch_size))
+    full_epochs = math.floor(epochs)
+    frac_epochs = epochs % 1
+    terms_per_batch = num_testu * batch_size * batch_size
+    obj_history = []
+    best_M = np.ones(num_feats)
+    best_b = np.zeros(num_feats)
+    for epoch in range(full_epochs + 1):
+        epoch_start_M = M.detach().numpy()
+        epoch_start_b = b.detach().numpy()
+        Mz = torch.zeros(num_feats)
+        bz = torch.zeros(num_feats)
+        objs = np.zeros(batches)
+        if epoch == full_epochs:
+            cur_batches = round(frac_epochs * batches)
+        else:
+            cur_batches = batches
+        for batch in range(cur_batches):
+            tgtsample_ixs = [
+                rng.choice(
+                    num_T, size=batch_size, replace=True, p=T_weights[:, cix]
+                ).tolist()
+                for cix in range(num_testu)
+            ]
+            srcsample_ixs = [
+                rng.choice(
+                    num_S, size=batch_size, replace=True, p=S_weights[:, cix]
+                ).tolist()
+                for cix in range(num_testu)
+            ]
+            obj = torch.tensor(0.0, requires_grad=True)
+            for cix in range(num_testu):
+                Tsample = T_torch[tgtsample_ixs[cix], :]
+                adaptedSsample = S_torch[srcsample_ixs[cix], :] * M.view(
+                    1, -1
+                ) + b.view(1, -1)
+                length_scale_np = (
+                    torch.mean((Tsample - adaptedSsample) ** 2, axis=0).detach().numpy()
+                )
+                invroot_length_scale = 1.0 / np.sqrt(length_scale_np)
+                lscaler = torch.from_numpy(invroot_length_scale).view(1, -1)
+                scaled_Tsample = Tsample * lscaler
+                scaled_adaptedSsample = adaptedSsample * lscaler
+
+                factor = Xtestu_counts[cix] / terms_per_batch
+                obj = obj - 2 * factor * torch.sum(
+                    torch.exp(
+                        -1.0
+                        / 2.0
+                        * (
+                            (scaled_Tsample @ scaled_Tsample.T).diag().unsqueeze(1)
+                            - 2 * scaled_Tsample @ scaled_adaptedSsample.T
+                            + (scaled_adaptedSsample @ scaled_adaptedSsample.T)
+                            .diag()
+                            .unsqueeze(0)
+                        )
+                    )
+                )
+                obj = obj + factor * torch.sum(
+                    torch.exp(
+                        -1.0
+                        / 2.0
+                        * (
+                            (scaled_adaptedSsample @ scaled_adaptedSsample.T)
+                            .diag()
+                            .unsqueeze(1)
+                            - 2 * scaled_adaptedSsample @ scaled_adaptedSsample.T
+                            + (scaled_adaptedSsample @ scaled_adaptedSsample.T)
+                            .diag()
+                            .unsqueeze(0)
+                        )
+                    )
+                )
+
+            obj.backward()
+            with torch.no_grad():
+                Mz = beta * Mz + M.grad
+                bz = beta * bz + b.grad
+                M -= alpha * Mz
+                b -= alpha * bz
+                print(torch.mean(torch.abs(M.grad)))
+            M.grad.zero_()
+            b.grad.zero_()
+            if verbose >= 2:
+                print(
+                    f"epoch:{epoch}/{epochs} batch:{batch}/{cur_batches} obj:{obj:.5f}"
+                )
+            objs[batch] = obj.detach().numpy()
+
+        last_obj = np.mean(objs)
+        if verbose >= 1:
+            print(f"epoch:{epoch} {objs[0]:.5f}->{objs[-1]:.5f} avg:{last_obj:.5f}")
+        if epoch > 0 and last_obj < np.min(np.array(obj_history)):
+            best_M = epoch_start_M
+            print(best_M)
+            best_b = epoch_start_b
+        if epoch == full_epochs and full_epochs == 0:
+            best_M = M.detach().numpy()
+            best_b = b.detach().numpy()
+        if len(obj_history) >= 10:
+            if last_obj > np.max(np.array(obj_history[-10:])):
+                # Terminate early if worse than all previous 10 iterations
+                if verbose >= 1:
+                    print(
+                        f"Terminating {(alpha, beta)} after epoch {epoch}: {last_obj:.5f}"
+                    )
+                break
+        obj_history.append(last_obj)
+    best_M = np.diag(best_M)
+    return (best_M, best_b, None)
 
 
 def run_mmd_affine(
@@ -541,6 +727,9 @@ def heteroscedastic_gp_distr(
     est_mus = np.zeros((num_test, num_feats))
     est_sigmas = np.zeros((num_test, num_feats))
     for fix in range(num_feats):
+        if fix % (1 + num_feats // 100) == 0:
+            print(f"fix:{fix}/{num_feats}")
+
         if custom_kernel is not None:
             first_kernel = custom_kernel()
         elif confounder_is_cat:
@@ -956,14 +1145,40 @@ def run_kl_independent(
                 return obj
 
             mb_init = torch.tensor([1.0, 0.0])
-            res = tm.minimize(
-                reverse_kl_obj,
-                mb_init,
-                method=method,
-                max_iter=max_iter,
-                disp=verbose,
-            )
-            (m_[fix], b_[fix]) = res.x.numpy()
+            try:
+                res = tm.minimize(
+                    reverse_kl_obj,
+                    mb_init,
+                    method=method,
+                    max_iter=max_iter,
+                    disp=verbose,
+                )
+                (m_[fix], b_[fix]) = res.x.numpy()
+            except:
+                print("l-bfgs failure, trying cg")
+                print(r_1, r_2, r_3, r_4, r_5, r_6, r_7)
+                res = tm.minimize(
+                    reverse_kl_obj,
+                    mb_init,
+                    method="cg",
+                    max_iter=max_iter,
+                    disp=verbose,
+                )
+                (m_[fix], b_[fix]) = res.x.numpy()
+
+                m_plot = np.geomspace(m_[fix] / 10, m_[fix] * 10, 500)
+                b_plot = np.linspace(b_[fix] - 10, b_[fix] + 10, 200)
+                mb_objs = np.zeros((500, 200))
+                for mix in range(500):
+                    for bix in range(200):
+                        with torch.no_grad():
+                            mb_objs[mix, bix] = reverse_kl_obj(
+                                torch.tensor([m_plot[mix], b_plot[bix]])
+                            ).numpy()
+                debug_dict["m_plot"] = m_plot
+                debug_dict["b_plot"] = b_plot
+                debug_dict["mb_objs"] = mb_objs
+
             if debug and fix == 0:
                 m_plot = np.geomspace(m_[fix] / 10, m_[fix] * 10, 500)
                 b_plot = np.linspace(b_[fix] - 10, b_[fix] + 10, 200)
