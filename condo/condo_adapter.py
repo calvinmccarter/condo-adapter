@@ -88,8 +88,8 @@ def run_mmd_independent(
             target_kernel = CatKernel()
             source_kernel = CatKernel()
         else:
-            target_kernel = 1.0 * RBF(length_scale=np.std(X_S, axis=0))
-            source_kernel = 1.0 * RBF(length_scale=np.std(X_T, axis=0))
+            target_kernel = 1.0 * RBF(length_scale=np.std(X_T, axis=0))
+            source_kernel = 1.0 * RBF(length_scale=np.std(X_S, axis=0))
 
     target_similarities = target_kernel(X_T, Xtestu)  # (num_T, num_testu)
     T_weights = target_similarities / np.sum(target_similarities, axis=0, keepdims=True)
@@ -285,8 +285,8 @@ def run_mmd_independent_fast(
             target_kernel = CatKernel()
             source_kernel = CatKernel()
         else:
-            target_kernel = 1.0 * RBF(length_scale=np.std(X_S, axis=0))
-            source_kernel = 1.0 * RBF(length_scale=np.std(X_T, axis=0))
+            target_kernel = 1.0 * RBF(length_scale=np.std(X_T, axis=0))
+            source_kernel = 1.0 * RBF(length_scale=np.std(X_S, axis=0))
 
     target_similarities = target_kernel(X_T, Xtestu)  # (num_T, num_testu)
     T_weights = target_similarities / np.sum(target_similarities, axis=0, keepdims=True)
@@ -468,8 +468,8 @@ def run_mmd_affine(
             target_kernel = CatKernel()
             source_kernel = CatKernel()
         else:
-            target_kernel = 1.0 * RBF(length_scale=np.std(X_S, axis=0))
-            source_kernel = 1.0 * RBF(length_scale=np.std(X_T, axis=0))
+            target_kernel = 1.0 * RBF(length_scale=np.std(X_T, axis=0))
+            source_kernel = 1.0 * RBF(length_scale=np.std(X_S, axis=0))
 
     target_similarities = target_kernel(X_T, Xtestu)  # (num_T, num_testu)
     T_weights = target_similarities / np.sum(target_similarities, axis=0, keepdims=True)
