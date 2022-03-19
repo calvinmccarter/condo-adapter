@@ -1198,7 +1198,10 @@ class ConDoAdapter:
                     **self.optim_kwargs,
                 )
 
-        self.M_inv_ = np.linalg.inv(self.M_)
+        if self.transform_type == "location-scale":
+            self.M_inv_ = np.diag(1.0 / np.diag(self.M_))
+        elif self.transform_type == "affine":
+            self.M_inv_ = np.linalg.inv(self.M_)
 
         return self
 
