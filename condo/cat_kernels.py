@@ -17,7 +17,7 @@ class CatKernel(GenericKernelMixin, Kernel):
         """
         kernel value between a pair of categories
         """
-        return 1.0 if np.array_equal(s1, s2) else 0.0
+        return 1.0 if np.array_equal(s1, s2) else 1e-8
 
     def _g(self, s1, s2):
         """
