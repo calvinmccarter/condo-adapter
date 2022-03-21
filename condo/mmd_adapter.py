@@ -241,18 +241,24 @@ def run_mmd_affine(
 
     M = torch.eye(num_feats, num_feats, dtype=torch.float64, requires_grad=True)
     b = torch.zeros(num_feats, dtype=torch.float64, requires_grad=True)
-    batches = round(num_S * num_T / (batch_size * batch_size))
+    batches = math.ceil(num_S * num_T / (batch_size * batch_size))
+    full_epochs = math.floor(epochs)
+    frac_epochs = epochs % 1
     terms_per_batch = batch_size * batch_size
     obj_history = []
     best_M = np.eye(num_feats, num_feats)
     best_b = np.zeros(num_feats)
-    for epoch in range(epochs):
+    for epoch in range(full_epochs + 1):
         epoch_start_M = M.detach().numpy()
         epoch_start_b = b.detach().numpy()
         Mz = torch.zeros(num_feats, num_feats)
         bz = torch.zeros(num_feats)
         objs = np.zeros(batches)
-        for batch in range(batches):
+        if epoch == full_epochs:
+            cur_batches = round(frac_epochs * batches)
+        else:
+            cur_batches = batches
+        for batch in range(cur_batches):
             tgtsample_ixs = rng.choice(num_T, size=batch_size, replace=True).tolist()
             srcsample_ixs = rng.choice(num_S, size=batch_size, replace=True).tolist()
             obj = torch.tensor(0.0, requires_grad=True)
@@ -302,6 +308,10 @@ def run_mmd_affine(
         if epoch > 0 and last_obj < np.min(np.array(obj_history)):
             best_M = epoch_start_M
             best_b = epoch_start_b
+        if epoch == full_epochs and full_epochs == 0:
+            best_M = M.detach().numpy()
+            best_b = b.detach().numpy()
+
         if len(obj_history) >= 10:
             if last_obj > np.max(np.array(obj_history[-10:])):
                 # Terminate early if worse than all previous 10 iterations

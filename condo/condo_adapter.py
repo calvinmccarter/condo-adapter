@@ -391,7 +391,6 @@ def run_mmd_independent_fast(
             print(f"epoch:{epoch} {objs[0]:.5f}->{objs[-1]:.5f} avg:{last_obj:.5f}")
         if epoch > 0 and last_obj < np.min(np.array(obj_history)):
             best_M = epoch_start_M
-            print(best_M)
             best_b = epoch_start_b
         if epoch == full_epochs and full_epochs == 0:
             best_M = M.detach().numpy()
