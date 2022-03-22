@@ -70,6 +70,9 @@ def run_mmd_independent(
     debug_tuple = None
 
     for fix in range(num_feats):
+        if verbose >= 1 and fix % (1 + num_feats // 100) == 0:
+            print(f"fix:{fix}/{num_feats}")
+
         M = torch.eye(1, 1, dtype=torch.float64, requires_grad=True)
         b = torch.zeros(1, dtype=torch.float64, requires_grad=True)
 
@@ -132,13 +135,13 @@ def run_mmd_independent(
 
                 M.grad.zero_()
                 b.grad.zero_()
-                if verbose >= 2:
+                if verbose >= 3:
                     print(
                         f"epoch:{epoch}/{epochs} batch:{batch}/{batches} obj:{obj:.5f}"
                     )
                 objs[batch] = obj.detach().numpy()
             last_obj = np.mean(objs)
-            if verbose >= 1:
+            if verbose >= 2:
                 print(f"epoch:{epoch} {objs[0]:.5f}->{objs[-1]:.5f} avg:{last_obj:.5f}")
             if epoch > 0 and last_obj < np.min(np.array(obj_history)):
                 best_M = epoch_start_M
@@ -146,7 +149,7 @@ def run_mmd_independent(
             if len(obj_history) >= 10:
                 if last_obj > np.max(np.array(obj_history[-10:])):
                     # Terminate early if worse than all previous 10 iterations
-                    if verbose >= 1:
+                    if verbose >= 2:
                         print(f"Terminating {fix} after epoch {epoch}: {last_obj:.5f}")
                     break
             obj_history.append(last_obj)
