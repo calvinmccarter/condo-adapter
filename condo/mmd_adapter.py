@@ -264,27 +264,40 @@ def run_mmd_affine(
             obj = torch.tensor(0.0, requires_grad=True)
             Tsample = T_torch[tgtsample_ixs, :]
             adaptedSsample = S_torch[srcsample_ixs, :] @ M.T + b.reshape(1, -1)
-            length_scale = torch.mean((Tsample - adaptedSsample) ** 2).detach().numpy()
+            length_scale_np = (
+                torch.mean((Tsample - adaptedSsample) ** 2, axis=0).detach().numpy()
+            )
+            invroot_length_scale = 1.0 / np.sqrt(length_scale_np)
+            lscaler = torch.from_numpy(invroot_length_scale).view(1, -1)
+            scaled_Tsample = Tsample * lscaler
+            scaled_adaptedSsample = adaptedSsample * lscaler
+
             factor = 1.0 / terms_per_batch
             obj = obj - 2 * factor * torch.sum(
                 torch.exp(
                     -1.0
-                    / (2 * length_scale)
+                    / 2.0
                     * (
-                        (Tsample @ Tsample.T).diag().unsqueeze(1)
-                        - 2 * Tsample @ adaptedSsample.T
-                        + (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(0)
+                        (scaled_Tsample @ scaled_Tsample.T).diag().unsqueeze(1)
+                        - 2 * scaled_Tsample @ scaled_adaptedSsample.T
+                        + (scaled_adaptedSsample @ scaled_adaptedSsample.T)
+                        .diag()
+                        .unsqueeze(0)
                     )
                 )
             )
             obj = obj + factor * torch.sum(
                 torch.exp(
                     -1.0
-                    / (2 * length_scale)
+                    / 2.0
                     * (
-                        (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(1)
-                        - 2 * adaptedSsample @ adaptedSsample.T
-                        + (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(0)
+                        (scaled_adaptedSsample @ scaled_adaptedSsample.T)
+                        .diag()
+                        .unsqueeze(1)
+                        - 2 * scaled_adaptedSsample @ scaled_adaptedSsample.T
+                        + (scaled_adaptedSsample @ scaled_adaptedSsample.T)
+                        .diag()
+                        .unsqueeze(0)
                     )
                 )
             )
