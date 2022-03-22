@@ -726,7 +726,7 @@ def heteroscedastic_gp_distr(
     est_mus = np.zeros((num_test, num_feats))
     est_sigmas = np.zeros((num_test, num_feats))
     for fix in range(num_feats):
-        if fix % (1 + num_feats // 100) == 0:
+        if verbose >= 1 and fix % (1 + num_feats // 100) == 0:
             print(f"fix:{fix}/{num_feats}")
 
         if custom_kernel is not None:
@@ -812,6 +812,8 @@ def homoscedastic_gp_distr(
     est_mus = np.zeros((num_test, num_feats))
     est_sigmas = np.zeros((num_test, num_feats))
     for fix in range(num_feats):
+        if verbose >= 1 and fix % (1 + num_feats // 100) == 0:
+            print(f"fix:{fix}/{num_feats}")
         if custom_kernel is not None:
             kernel = custom_kernel()
             alpha = 1e-3
