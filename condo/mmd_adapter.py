@@ -298,7 +298,9 @@ def run_mmd_affine(
             M.grad.zero_()
             b.grad.zero_()
             if verbose >= 2:
-                print(f"epoch:{epoch}/{epochs} batch:{batch}/{batches} obj:{obj:.5f}")
+                print(
+                    f"epoch:{epoch}/{epochs} batch:{batch}/{cur_batches} obj:{obj:.5f}"
+                )
             objs[batch] = obj.detach().numpy()
 
         last_obj = np.mean(objs)
