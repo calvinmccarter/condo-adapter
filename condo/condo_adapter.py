@@ -643,6 +643,7 @@ def independent_linear_distr(
     X: np.ndarray,
     Xtest: np.ndarray,
     verbose: Union[bool, int] = 0,
+    alpha_per_target: bool = True,
 ):
     """
     Args:
@@ -684,7 +685,7 @@ def independent_linear_distr(
     encodedX = oher.transform(X_df)
     encodedXtest = oher.transform(Xtest_df)
 
-    ridger = RidgeCV(alpha_per_target=True)
+    ridger = RidgeCV(alpha_per_target=alpha_per_target)
     ridger.fit(encodedX, D)
     predD = ridger.predict(encodedX)
     predDtest = ridger.predict(encodedXtest)
@@ -986,6 +987,7 @@ def run_kl_independent(
     verbose: Union[bool, int],
     method: str = "l-bfgs",
     max_iter: int = 50,
+    alpha_per_target: bool = True,
 ):
     num_feats = S.shape[1]
     num_confounders = X_S.shape[1]
@@ -1004,12 +1006,14 @@ def run_kl_independent(
             X=X_T,
             Xtest=Xtestu,
             verbose=verbose,
+            alpha_per_target=alpha_per_target,
         )
         (est_mu_S_all, est_sigma_S_all, predictor_S) = independent_linear_distr(
             D=S,
             X=X_S,
             Xtest=Xtestu,
             verbose=verbose,
+            alpha_per_target=alpha_per_target,
         )
     elif model_type == "homoscedastic-gp":
         (est_mu_T_all, est_sigma_T_all, predictor_T) = homoscedastic_gp_distr(
@@ -1156,29 +1160,20 @@ def run_kl_independent(
                 )
                 (m_[fix], b_[fix]) = res.x.numpy()
             except:
-                print("l-bfgs failure, trying cg")
+                print(f"fix:{fix}: l-bfgs failure, trying cg")
                 print(r_1, r_2, r_3, r_4, r_5, r_6, r_7)
-                res = tm.minimize(
-                    reverse_kl_obj,
-                    mb_init,
-                    method="cg",
-                    max_iter=max_iter,
-                    disp=verbose,
-                )
-                (m_[fix], b_[fix]) = res.x.numpy()
-
-                m_plot = np.geomspace(m_[fix] / 10, m_[fix] * 10, 500)
-                b_plot = np.linspace(b_[fix] - 10, b_[fix] + 10, 200)
-                mb_objs = np.zeros((500, 200))
-                for mix in range(500):
-                    for bix in range(200):
-                        with torch.no_grad():
-                            mb_objs[mix, bix] = reverse_kl_obj(
-                                torch.tensor([m_plot[mix], b_plot[bix]])
-                            ).numpy()
-                debug_dict["m_plot"] = m_plot
-                debug_dict["b_plot"] = b_plot
-                debug_dict["mb_objs"] = mb_objs
+                try:
+                    res = tm.minimize(
+                        reverse_kl_obj,
+                        mb_init,
+                        method="cg",
+                        max_iter=max_iter,
+                        disp=verbose,
+                    )
+                    (m_[fix], b_[fix]) = res.x.numpy()
+                except:
+                    print(f"fix:{fix}: cg failure")
+                    (m_[fix], b_[fix]) = (1.0, 0.0)
 
             if debug and fix == 0:
                 m_plot = np.geomspace(m_[fix] / 10, m_[fix] * 10, 500)
@@ -1194,6 +1189,8 @@ def run_kl_independent(
                 debug_dict["b_plot"] = b_plot
                 debug_dict["mb_objs"] = mb_objs
 
+        m_[np.isnan(m_)] = 1.0
+        b_[np.isnan(b_)] = 0.0
         M_ = np.diag(m_)
         return (M_, b_, debug_dict)
     else:
