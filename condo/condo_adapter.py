@@ -1182,10 +1182,10 @@ def run_kl_independent(
 class ConDoAdapter:
     def __init__(
         self,
-        sampling: str = "source",
+        sampling: str = "proportional",
         transform_type: str = "location-scale",
         model_type: str = "linear",
-        divergence: Union[None, str] = "mmd",
+        divergence: Union[None, str] = "reverse",
         custom_kernel=None,
         optim_kwargs: dict = None,
         verbose: Union[bool, int] = 1,
