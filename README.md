@@ -1,6 +1,8 @@
 # condo-adapter
 
-Shield: [![CC BY-NC-SA 4.0][cc-by-nc-sa-shield]][cc-by-nc-sa]
+[![PyPI version](https://badge.fury.io/py/condo.svg)](https://badge.fury.io/py/condo.svg)
+[![Downloads](https://pepy.tech/badge/condo)](https://pepy.tech/project/condo)
+[![CC BY-NC-SA 4.0][cc-by-nc-sa-shield]][cc-by-nc-sa]
 
 ConDo Adapter performs Confounded Domain Adaptation, which corrects for
 batch effects while conditioning on confounding variables.
@@ -25,6 +27,16 @@ In Bibtex format:
 ```
 
 ## Installation
+
+### Installation from pip
+
+You can install the toolbox through PyPI with:
+
+```console
+pip install condo
+```
+
+### Installation from source
 
 After cloning this repo, install the dependencies on the command-line via:
 

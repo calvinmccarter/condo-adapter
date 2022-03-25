@@ -24,6 +24,7 @@ setup(
     description="Library to perform confounded domain adaptation.",
     license="apache-2.0",
     author="Calvin McCarter",
+    author_email="mccarter.calvin@gmail.com",
     packages=PACKAGES,
     install_requires=["torch>=1.4.0"],
     long_description=long_description,
