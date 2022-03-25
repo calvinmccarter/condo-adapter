@@ -1116,24 +1116,35 @@ def run_kl_independent(
         return (M_, b_, debug_dict)
 
     elif divergence == "reverse":
-        R_1 = -2 * np.mean(est_var_T_all, axis=0)
-        R_2 = np.mean(est_var_S_all, axis=0)
-        R_3 = np.mean(est_mu_S_all**2, axis=0)
-        R_4 = 2 * np.mean(est_mu_S_all, axis=0)
-        R_5 = -2 * np.mean(est_mu_S_all * est_mu_T_all, axis=0)
-        R_6 = np.ones(num_feats)
-        R_7 = -2 * np.mean(est_mu_T_all, axis=0)
 
-        # Loop over features since independent not joint
-        for fix in range(num_feats):
+        C_1 = np.mean(est_mu_T_all, axis=0, keepdims=True)
+        C_2 = np.mean(est_mu_S_all, axis=0, keepdims=True)
+        R_A = (
+            2 * np.sum(est_var_S_all, axis=0)
+            + 2 * np.sum((est_mu_S_all - C_2) ** 2, axis=0)
+            + 1e-8
+        )
+        R_B = 2 * np.sum((C_1 - est_mu_T_all) * (est_mu_S_all - C_2), axis=0)
+        R_C = -2 * np.sum(est_var_T_all, axis=0)
+        m_ = (-1 * R_B + np.sqrt(R_B**2 - 4 * R_A * R_C)) / (2 * R_A)
+        b_ = C_1.squeeze() - m_ * C_2.squeeze()
+        if debug:
+            R_1 = -2 * np.mean(est_var_T_all, axis=0)
+            R_2 = np.mean(est_var_S_all, axis=0)
+            R_3 = np.mean(est_mu_S_all**2, axis=0)
+            R_4 = 2 * np.mean(est_mu_S_all, axis=0)
+            R_5 = -2 * np.mean(est_mu_S_all * est_mu_T_all, axis=0)
+            R_6 = np.ones(num_feats)
+            R_7 = -2 * np.mean(est_mu_T_all, axis=0)
+
             (r_1, r_2, r_3, r_4, r_5, r_6, r_7) = (
-                R_1[fix],
-                R_2[fix],
-                R_3[fix],
-                R_4[fix],
-                R_5[fix],
-                R_6[fix],
-                R_7[fix],
+                R_1[0],
+                R_2[0],
+                R_3[0],
+                R_4[0],
+                R_5[0],
+                R_6[0],
+                R_7[0],
             )
 
             def reverse_kl_obj(mb):
@@ -1149,48 +1160,19 @@ def run_kl_independent(
                 )
                 return obj
 
-            mb_init = torch.tensor([1.0, 0.0])
-            try:
-                res = tm.minimize(
-                    reverse_kl_obj,
-                    mb_init,
-                    method=method,
-                    max_iter=max_iter,
-                    disp=verbose,
-                )
-                (m_[fix], b_[fix]) = res.x.numpy()
-            except:
-                print(f"fix:{fix}: l-bfgs failure, trying cg")
-                print(r_1, r_2, r_3, r_4, r_5, r_6, r_7)
-                try:
-                    res = tm.minimize(
-                        reverse_kl_obj,
-                        mb_init,
-                        method="cg",
-                        max_iter=max_iter,
-                        disp=verbose,
-                    )
-                    (m_[fix], b_[fix]) = res.x.numpy()
-                except:
-                    print(f"fix:{fix}: cg failure")
-                    (m_[fix], b_[fix]) = (1.0, 0.0)
+            m_plot = np.geomspace(m_[0] / 10, m_[0] * 10, 500)
+            b_plot = np.linspace(b_[0] - 10, b_[0] + 10, 200)
+            mb_objs = np.zeros((500, 200))
+            for mix in range(500):
+                for bix in range(200):
+                    with torch.no_grad():
+                        mb_objs[mix, bix] = reverse_kl_obj(
+                            torch.tensor([m_plot[mix], b_plot[bix]])
+                        ).numpy()
+            debug_dict["m_plot"] = m_plot
+            debug_dict["b_plot"] = b_plot
+            debug_dict["mb_objs"] = mb_objs
 
-            if debug and fix == 0:
-                m_plot = np.geomspace(m_[fix] / 10, m_[fix] * 10, 500)
-                b_plot = np.linspace(b_[fix] - 10, b_[fix] + 10, 200)
-                mb_objs = np.zeros((500, 200))
-                for mix in range(500):
-                    for bix in range(200):
-                        with torch.no_grad():
-                            mb_objs[mix, bix] = reverse_kl_obj(
-                                torch.tensor([m_plot[mix], b_plot[bix]])
-                            ).numpy()
-                debug_dict["m_plot"] = m_plot
-                debug_dict["b_plot"] = b_plot
-                debug_dict["mb_objs"] = mb_objs
-
-        m_[np.isnan(m_)] = 1.0
-        b_[np.isnan(b_)] = 0.0
         M_ = np.diag(m_)
         return (M_, b_, debug_dict)
     else:
