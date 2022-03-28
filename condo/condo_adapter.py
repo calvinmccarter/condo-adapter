@@ -513,15 +513,19 @@ def run_mmd_affine(
             for cix in range(num_testu):
                 Tsample = T_torch[tgtsample_ixs[cix], :]
                 adaptedSsample = S_torch[srcsample_ixs[cix], :] @ M.T + b.reshape(1, -1)
-                # TODO- make different for each feature
-                length_scale = (
-                    torch.mean((Tsample - adaptedSsample) ** 2).detach().numpy()
+                length_scale_np = (
+                    torch.mean((Tsample - adaptedSsample) ** 2, axis=0).detach().numpy()
                 )
+                invroot_length_scale = 1.0 / np.sqrt(length_scale_np)
+                lscaler = torch.from_numpy(invroot_length_scale).view(1, -1)
+                Tsample = Tsample * lscaler
+                adaptedSsample = adaptedSsample * lscaler
+
                 factor = Xtestu_counts[cix] / terms_per_batch
                 obj = obj - 2 * factor * torch.sum(
                     torch.exp(
                         -1.0
-                        / (2 * length_scale)
+                        / 2.0
                         * (
                             (Tsample @ Tsample.T).diag().unsqueeze(1)
                             - 2 * Tsample @ adaptedSsample.T
@@ -532,7 +536,7 @@ def run_mmd_affine(
                 obj = obj + factor * torch.sum(
                     torch.exp(
                         -1.0
-                        / (2 * length_scale)
+                        / 2.0
                         * (
                             (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(1)
                             - 2 * adaptedSsample @ adaptedSsample.T
