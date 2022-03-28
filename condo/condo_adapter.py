@@ -513,6 +513,7 @@ def run_mmd_affine(
             for cix in range(num_testu):
                 Tsample = T_torch[tgtsample_ixs[cix], :]
                 adaptedSsample = S_torch[srcsample_ixs[cix], :] @ M.T + b.reshape(1, -1)
+                # TODO- make different for each feature
                 length_scale = (
                     torch.mean((Tsample - adaptedSsample) ** 2).detach().numpy()
                 )
@@ -695,6 +696,192 @@ def independent_linear_distr(
     est_sigmas = np.std(residD, axis=0, keepdims=True)
     est_sigmas = np.tile(est_sigmas, (num_test, 1))
     predictor = ridger
+
+    return (est_mus, est_sigmas, predictor)
+
+
+def independent_pogmm_distr(
+    D: np.ndarray,
+    X: np.ndarray,
+    Xtest: np.ndarray,
+    min_values_per_category: int = 5,
+    kmeans_samples_per_cluster: int = 20,
+    kmeans_max_clusters: int = 10,
+    verbose: Union[bool, int] = 0,
+):
+    """
+    Args:
+        D: (num_train, num_feats)
+        X: (num_train, num_confounders)
+        Xtest: (num_test, num_confounders)
+
+    Returns:
+        est_mus: (num_test, num_feats)
+        est_sigmas: (num_test, num_feats)
+        predictor: sklearn model predicting D given X
+    """
+    num_test = Xtest.shape[0]
+    (num_D, num_feats) = D.shape
+    num_confounders = X.shape[1]
+
+    # TODO- Unnecessary?
+    D = D.copy()
+    X = X.copy()
+    Xtest = Xtest.copy()
+
+    n_clusters = int(num_D / kmeans_samples_per_cluster)
+    if kmeans_max_clusters is not None:
+        n_clusters = min(kmeans_max_clusters, n_clusters)
+    n_clusters = max(1, n_clusters)
+
+    X_df = pd.DataFrame(X)
+    Xtest_df = pd.DataFrame(Xtest)
+    X_df = X_df.convert_dtypes()
+    Xtest_df = Xtest_df.convert_dtypes()
+    # TODO: classify bool as categorical
+    cat_columns = [
+        col for col in X_df.columns if not pd.api.types.is_numeric_dtype(X_df[col])
+    ]
+    X_df[cat_columns] = X_df[cat_columns].astype("category")
+    Xtest_df[cat_columns] = Xtest_df[cat_columns].astype("category")
+    quant_columns = [
+        col for col in X_df.columns if pd.api.types.is_numeric_dtype(X_df[col])
+    ]
+    for qcol in quant_columns:
+        curX = X_df[[qcol]].values
+        kmeaner = KMeans(n_clusters=n_clusters)
+        kmeaner.fit(curX)
+        X_df[qcol] = kmeaner.predict(curX).astype(str)
+        Xtest_df[qcol] = kmeaner.predict(Xtest_df[[qcol]].values).astype(str)
+    X_df[quant_columns] = X_df[quant_columns].astype("category")
+    Xtest_df[quant_columns] = Xtest_df[quant_columns].astype("category")
+
+    all_est_mus = []  # len(num_confounders), each an ndarray (num_test, num_feats)
+    all_est_sigmas = []
+    combined_mus = np.mean(D, axis=0, keepdims=True)
+    combined_sigmas = np.std(D, axis=0, keepdims=True, ddof=1)
+    for cix in range(num_confounders):
+        c_X = X_df.values[:, cix]
+        c_Xtest = Xtest_df.values[:, cix]
+        c_vals, c_counts = np.unique(c_X, return_counts=True)
+        c_est_mus = np.repeat(combined_mus, num_test, axis=0)
+        c_est_sigmas = np.repeat(combined_sigmas, num_test, axis=0)
+        for c_val, c_count in zip(c_vals, c_counts):
+            if c_count >= min_values_per_category:
+                c_val_ixs = np.where(c_X == c_val)[0]
+                c_val_ixs_test = np.where(c_Xtest == c_val)[0]
+                c_mu = np.mean(D[c_val_ixs, :], axis=0, keepdims=True)
+                c_sigma = np.std(D[c_val_ixs, :], axis=0, keepdims=True, ddof=1) + 1e-4
+                c_est_mus[c_val_ixs_test, :] = c_mu
+                c_est_sigmas[c_val_ixs_test, :] = c_sigma
+        all_est_mus.append(c_est_mus)
+        all_est_sigmas.append(c_est_sigmas)
+
+    est_mus_numer = np.zeros((num_test, num_feats))
+    est_mus_denom = np.zeros((num_test, num_feats))
+    for cix in range(num_confounders):
+        est_mus_numer += all_est_mus[cix] / (2 * all_est_sigmas[cix])
+        est_mus_denom += 1 / (2 * all_est_sigmas[cix])
+    est_mus = est_mus_numer / est_mus_denom
+    est_sigmas = 1 / (2 * est_mus_denom)
+    predictor = None  # TODO
+
+    return (est_mus, est_sigmas, predictor)
+
+
+def joint_pogmm_distr(
+    D: np.ndarray,
+    X: np.ndarray,
+    Xtest: np.ndarray,
+    min_values_per_category: int = 5,
+    kmeans_samples_per_cluster: int = 20,
+    kmeans_max_clusters: int = 10,
+    verbose: Union[bool, int] = 0,
+):
+    """
+    Args:
+        D: (num_train, num_feats)
+        X: (num_train, num_confounders)
+        Xtest: (num_test, num_confounders)
+
+    Returns:
+        est_mus: (num_test, num_feats)
+        est_sigmas: (num_test, num_feats, num_feats)
+        predictor: sklearn model predicting D given X
+    """
+    num_test = Xtest.shape[0]
+    (num_D, num_feats) = D.shape
+    num_confounders = X.shape[1]
+
+    # TODO- Unnecessary?
+    D = D.copy()
+    X = X.copy()
+    Xtest = Xtest.copy()
+
+    n_clusters = int(num_D / kmeans_samples_per_cluster)
+    if kmeans_max_clusters is not None:
+        n_clusters = min(kmeans_max_clusters, n_clusters)
+    n_clusters = max(1, n_clusters)
+
+    X_df = pd.DataFrame(X)
+    Xtest_df = pd.DataFrame(Xtest)
+    X_df = X_df.convert_dtypes()
+    Xtest_df = Xtest_df.convert_dtypes()
+    # TODO: classify bool as categorical
+    cat_columns = [
+        col for col in X_df.columns if not pd.api.types.is_numeric_dtype(X_df[col])
+    ]
+    X_df[cat_columns] = X_df[cat_columns].astype("category")
+    Xtest_df[cat_columns] = Xtest_df[cat_columns].astype("category")
+    quant_columns = [
+        col for col in X_df.columns if pd.api.types.is_numeric_dtype(X_df[col])
+    ]
+    for qcol in quant_columns:
+        curX = X_df[[qcol]].values
+        kmeaner = KMeans(n_clusters=n_clusters)
+        kmeaner.fit(curX)
+        X_df[qcol] = kmeaner.predict(curX).astype(str)
+        Xtest_df[qcol] = kmeaner.predict(Xtest_df[[qcol]].values).astype(str)
+    X_df[quant_columns] = X_df[quant_columns].astype("category")
+    Xtest_df[quant_columns] = Xtest_df[quant_columns].astype("category")
+
+    all_est_mus = np.zeros((num_confounders, num_test, num_feats))
+    all_est_precs = np.zeros((num_confounders, num_test, num_feats, num_feats))
+    combined_mus = np.mean(D, axis=0, keepdims=True)
+    glassoer = GraphicalLassoCV(verbose=verbose)
+    glassoer.fit(D[c_val_ixs, :])
+    combined_precs = glassoer.precision_
+    combined_precs = np.expand_dims(combined_precs, 0)  # (1, num_feats, num_feats)
+    for cix in range(num_confounders):
+        c_X = X_df.values[:, cix]
+        c_Xtest = Xtest_df.values[:, cix]
+        c_vals, c_counts = np.unique(c_X, return_counts=True)
+        c_est_mus = np.repeat(combined_mus, num_test, axis=0)
+        c_est_precs = np.repeat(combined_sigmas, num_test, axis=0)
+        for c_val, c_count in zip(c_vals, c_counts):
+            if c_count >= min_values_per_category:
+                c_val_ixs = np.where(c_X == c_val)[0]
+                c_val_ixs_test = np.where(c_Xtest == c_val)[0]
+                c_mu = np.mean(D[c_val_ixs, :], axis=0, keepdims=True)
+                glassoer = GraphicalLassoCV(verbose=verbose)
+                glassoer.fit(D[c_val_ixs, :])
+                c_precs = glassoer.precision_
+                c_est_mus[c_val_ixs_test, :] = c_mu
+                c_est_precs[c_val_ixs_test, :, :] = c_precs
+        all_est_mus[cix, :, :] = c_est_mus
+        all_est_precs[cix, :, :, :] = c_est_precs
+
+    est_mus = np.zeros((num_test, num_feats))
+    est_sigmas = np.zeros((num_test, num_feats, num_feats))
+    est_mus_numer = np.zeros((num_test, num_feats))
+    est_mus_denom = np.zeros((num_test, num_feats, num_feats))
+    for n in range(num_test):
+        for cix in range(num_confounders):
+            est_mus_numer[n, :] += all_est_precs[cix, n, :, :] @ all_est_mus[cix, n, :]
+            est_mus_denom[n, :, :] += all_est_precs[cix, n, :, :]
+        est_sigmas[n, :, :] = np.linalg.inv(est_mus_denom[n, :, :])
+        est_mus[n, :] = est_sigmas[n, :, :] @ est_mus_numer[n, :]
+    predictor = None  # TODO
 
     return (est_mus, est_sigmas, predictor)
 
@@ -1015,6 +1202,19 @@ def run_kl_independent(
             verbose=verbose,
             alpha_per_target=alpha_per_target,
         )
+    elif model_type == "pogmm":
+        (est_mu_T_all, est_sigma_T_all, predictor_T) = independent_pogmm_distr(
+            D=T,
+            X=X_T,
+            Xtest=Xtestu,
+            verbose=verbose,
+        )
+        (est_mu_S_all, est_sigma_S_all, predictor_S) = independent_pogmm_distr(
+            D=S,
+            X=X_S,
+            Xtest=Xtestu,
+            verbose=verbose,
+        )
     elif model_type == "homoscedastic-gp":
         (est_mu_T_all, est_sigma_T_all, predictor_T) = homoscedastic_gp_distr(
             D=T,
@@ -1228,6 +1428,7 @@ class ConDoAdapter:
             raise ValueError(f"invalid transform_type: {transform_type}")
         if model_type not in (
             "linear",
+            "pogmm",
             "homoscedastic-gp",
             "heteroscedastic-gp",
             "empirical",
@@ -1360,7 +1561,7 @@ class ConDoAdapter:
         else:
             assert self.divergence in ("forward", "reverse")
             if self.transform_type == "affine" and num_feats > 1:
-                assert self.model_type == "linear"
+                assert self.model_type in ("linear",)
                 self.M_, self.b_, self.debug_dict_ = run_kl_linear_affine(
                     S=S,
                     T=T,
@@ -1376,6 +1577,7 @@ class ConDoAdapter:
                 # location-scale transformation treats features independently
                 assert self.model_type in (
                     "linear",
+                    "pogmm",
                     "homoscedastic-gp",
                     "heteroscedastic-gp",
                 )
