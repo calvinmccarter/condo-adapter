@@ -757,33 +757,33 @@ def independent_pogmm_distr(
     Xtest_df[quant_columns] = Xtest_df[quant_columns].astype("category")
 
     all_est_mus = []  # len(num_confounders), each an ndarray (num_test, num_feats)
-    all_est_sigmas = []
+    all_est_vars = []
     combined_mus = np.mean(D, axis=0, keepdims=True)
-    combined_sigmas = np.std(D, axis=0, keepdims=True, ddof=1)
+    combined_vars = np.var(D, axis=0, keepdims=True, ddof=1) + 1e-4
     for cix in range(num_confounders):
         c_X = X_df.values[:, cix]
         c_Xtest = Xtest_df.values[:, cix]
         c_vals, c_counts = np.unique(c_X, return_counts=True)
         c_est_mus = np.repeat(combined_mus, num_test, axis=0)
-        c_est_sigmas = np.repeat(combined_sigmas, num_test, axis=0)
+        c_est_vars = np.repeat(combined_vars, num_test, axis=0)
         for c_val, c_count in zip(c_vals, c_counts):
             if c_count >= min_values_per_category:
                 c_val_ixs = np.where(c_X == c_val)[0]
                 c_val_ixs_test = np.where(c_Xtest == c_val)[0]
                 c_mu = np.mean(D[c_val_ixs, :], axis=0, keepdims=True)
-                c_sigma = np.std(D[c_val_ixs, :], axis=0, keepdims=True, ddof=1) + 1e-4
+                c_var = np.var(D[c_val_ixs, :], axis=0, keepdims=True, ddof=1) + 1e-4
                 c_est_mus[c_val_ixs_test, :] = c_mu
-                c_est_sigmas[c_val_ixs_test, :] = c_sigma
+                c_est_vars[c_val_ixs_test, :] = c_var
         all_est_mus.append(c_est_mus)
-        all_est_sigmas.append(c_est_sigmas)
+        all_est_vars.append(c_est_vars)
 
     est_mus_numer = np.zeros((num_test, num_feats))
     est_mus_denom = np.zeros((num_test, num_feats))
     for cix in range(num_confounders):
-        est_mus_numer += all_est_mus[cix] / (2 * all_est_sigmas[cix])
-        est_mus_denom += 1 / (2 * all_est_sigmas[cix])
+        est_mus_numer += all_est_mus[cix] / (2 * all_est_vars[cix])
+        est_mus_denom += 1 / (2 * all_est_vars[cix])
     est_mus = est_mus_numer / est_mus_denom
-    est_sigmas = 1 / (2 * est_mus_denom)
+    est_sigmas = np.sqrt(1 / (2 * est_mus_denom))
     predictor = None  # TODO
 
     return (est_mus, est_sigmas, predictor)
