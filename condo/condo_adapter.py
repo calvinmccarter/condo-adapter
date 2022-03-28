@@ -1,7 +1,6 @@
 from copy import deepcopy
 from typing import Union
 
-import hdbscan
 import math
 import numpy as np
 import pandas as pd
@@ -705,8 +704,8 @@ def independent_pogmm_distr(
     D: np.ndarray,
     X: np.ndarray,
     Xtest: np.ndarray,
-    min_values_per_category: int = 3,
-    kmeans_samples_per_cluster: int = 30,
+    min_values_per_category: int = 5,
+    kmeans_samples_per_cluster: int = 20,
     kmeans_max_clusters: int = 10,
     verbose: Union[bool, int] = 0,
 ):
@@ -750,15 +749,12 @@ def independent_pogmm_distr(
     ]
     for qcol in quant_columns:
         curX = X_df[[qcol]].values
-        clusterer = hdbscan.HDBSCAN(min_cluster_size=3, prediction_data=True)
-        clusterer.fit(curX)
-        X_labels = clusterer.labels_.astype(str)
-        X_df[qcol] = X_labels
-        Xtest_labels, _ = hdbscan.approximate_predict(
-            clusterer, Xtest_df[[qcol]].values
-        )
-        Xtest_labels = Xtest_labels.astype(str)
-        Xtest_df[qcol] = Xtest_labels
+        kmeaner = KMeans(n_clusters=n_clusters)
+        kmeaner.fit(curX)
+        X_df[qcol] = kmeaner.predict(curX).astype(str)
+        Xtest_df[qcol] = kmeaner.predict(Xtest_df[[qcol]].values).astype(str)
+    X_df[quant_columns] = X_df[quant_columns].astype("category")
+    Xtest_df[quant_columns] = Xtest_df[quant_columns].astype("category")
 
     all_est_mus = []  # len(num_confounders), each an ndarray (num_test, num_feats)
     all_est_vars = []
@@ -771,31 +767,24 @@ def independent_pogmm_distr(
         c_est_mus = np.repeat(combined_mus, num_test, axis=0)
         c_est_vars = np.repeat(combined_vars, num_test, axis=0)
         for c_val, c_count in zip(c_vals, c_counts):
-            if X_df.columns[cix] in quant_columns and c_val == "-1":
-                print(f"WARNING {c_val}")
-                continue
-            if c_count < min_values_per_category:
-                print(f"WARNING {c_val} {c_count}")
-                continue
-            c_val_ixs = np.where(c_X == c_val)[0]
-            c_val_ixs_test = np.where(c_Xtest == c_val)[0]
-            c_mu = np.mean(D[c_val_ixs, :], axis=0, keepdims=True)
-            c_var = np.var(D[c_val_ixs, :], axis=0, keepdims=True, ddof=1) + 1e-4
-            c_est_mus[c_val_ixs_test, :] = c_mu
-            c_est_vars[c_val_ixs_test, :] = c_var
-            # print(f"{c_val} {c_count} {c_mu} {np.sqrt(c_var)}")
+            if c_count >= min_values_per_category:
+                c_val_ixs = np.where(c_X == c_val)[0]
+                c_val_ixs_test = np.where(c_Xtest == c_val)[0]
+                c_mu = np.mean(D[c_val_ixs, :], axis=0, keepdims=True)
+                c_var = np.var(D[c_val_ixs, :], axis=0, keepdims=True, ddof=1) + 1e-4
+                c_est_mus[c_val_ixs_test, :] = c_mu
+                c_est_vars[c_val_ixs_test, :] = c_var
         all_est_mus.append(c_est_mus)
         all_est_vars.append(c_est_vars)
 
     est_mus_numer = np.zeros((num_test, num_feats))
     est_mus_denom = np.zeros((num_test, num_feats))
     for cix in range(num_confounders):
-        est_mus_numer += all_est_mus[cix] / (all_est_vars[cix])
-        est_mus_denom += 1 / (all_est_vars[cix])
+        est_mus_numer += all_est_mus[cix] / (2 * all_est_vars[cix])
+        est_mus_denom += 1 / (2 * all_est_vars[cix])
     est_mus = est_mus_numer / est_mus_denom
-    est_sigmas = np.sqrt(1 / est_mus_denom)
+    est_sigmas = np.sqrt(1 / (2 * est_mus_denom))
     predictor = None  # TODO
-    predictor = (Xtest, est_mus, est_sigmas)
 
     return (est_mus, est_sigmas, predictor)
 
