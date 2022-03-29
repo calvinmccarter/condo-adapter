@@ -3,7 +3,7 @@ import numpy as np
 from condo import ConDoAdapter
 
 
-@pytest.mark.parametrize("sampling", ["proportional", "target"])
+@pytest.mark.parametrize("sampling", ["sum-proportional", "target"])
 @pytest.mark.parametrize(
     "transform_type",
     ["location-scale"],

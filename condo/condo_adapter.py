@@ -35,6 +35,7 @@ def run_mmd_independent(
     X_S: np.ndarray,
     X_T: np.ndarray,
     Xtest: np.ndarray,
+    Wtest: np.ndarray,
     debug: bool,
     verbose: Union[bool, int],
     custom_kernel,
@@ -73,12 +74,15 @@ def run_mmd_independent(
     )
     # TODO: handle confounders of different dtypes
     if confounder_is_cat:
-        (Xtestu, Xtestu_counts) = np.unique(Xtest, axis=0, return_counts=True)
+        (Xtestu, Xtestu_idx, Xtestu_counts) = np.unique(
+            Xtest, axis=0, return_index=True, return_counts=True
+        )
+        Xtestu_counts = Xtestu_counts * Wtest[Xtestu_idx, 0]
         num_testu = Xtestu.shape[0]
     else:
         Xtestu = Xtest
         num_testu = num_test
-        Xtestu_counts = np.ones(num_testu)
+        Xtestu_counts = np.ones(num_testu) * Wtest[:, 0]
 
     if custom_kernel is not None:
         target_kernel = custom_kernel()
@@ -414,6 +418,7 @@ def run_mmd_affine(
     X_S: np.ndarray,
     X_T: np.ndarray,
     Xtest: np.ndarray,
+    Wtest: np.ndarray,
     custom_kernel,
     debug: bool,
     verbose: Union[bool, int],
@@ -452,12 +457,15 @@ def run_mmd_affine(
     )
     # TODO: handle confounders of different dtypes
     if confounder_is_cat:
-        (Xtestu, Xtestu_counts) = np.unique(Xtest, axis=0, return_counts=True)
+        (Xtestu, Xtestu_idx, Xtestu_counts) = np.unique(
+            Xtest, axis=0, return_index=True, return_counts=True
+        )
+        Xtestu_counts = Xtestu_counts * Wtest[Xtestu_idx, 0]
         num_testu = Xtestu.shape[0]
     else:
         Xtestu = Xtest
         num_testu = num_test
-        Xtestu_counts = np.ones(num_testu)
+        Xtestu_counts = np.ones(num_testu) * Wtest[:, 0]
 
     if custom_kernel is not None:
         target_kernel = custom_kernel()
@@ -591,6 +599,7 @@ def joint_linear_distr(
         D: (num_train, num_feats)
         X: (num_train, num_confounders)
         Xtest: (num_test, num_confounders)
+        Wtest: (num_test, 1)
 
     Returns:
         est_mus: (num_test, num_feats)
@@ -886,6 +895,7 @@ def joint_pogmm_distr(
         est_sigmas[n, :, :] = np.linalg.inv(est_mus_denom[n, :, :])
         est_mus[n, :] = est_sigmas[n, :, :] @ est_mus_numer[n, :]
     predictor = None  # TODO
+    # TODO- not tested
 
     return (est_mus, est_sigmas, predictor)
 
@@ -1059,6 +1069,7 @@ def run_kl_linear_affine(
     X_S: np.ndarray,
     X_T: np.ndarray,
     Xtest: np.ndarray,
+    Wtest: np.ndarray,
     divergence: str,
     debug: bool,
     verbose: Union[bool, int],
@@ -1072,7 +1083,10 @@ def run_kl_linear_affine(
     M_ = np.eye(num_feats, num_feats)
     b_ = np.zeros((1, num_feats))
 
-    (Xtestu, Xtestu_counts) = np.unique(Xtest, axis=0, return_counts=True)
+    (Xtestu, Xtestu_idx, Xtestu_counts) = np.unique(
+        Xtest, axis=0, return_index=True, return_counts=True
+    )
+    Xtestu_counts = Xtestu_counts * Wtest[Xtestu_idx, 0]
     num_testu = Xtestu.shape[0]
 
     (est_mu_T_all, est_Sigma_T, predictor_T) = joint_linear_distr(
@@ -1171,6 +1185,7 @@ def run_kl_independent(
     X_S: np.ndarray,
     X_T: np.ndarray,
     Xtest: np.ndarray,
+    Wtest: np.ndarray,
     model_type: str,
     divergence: str,
     custom_kernel,
@@ -1182,9 +1197,8 @@ def run_kl_independent(
 ):
     num_feats = S.shape[1]
     num_confounders = X_S.shape[1]
-    (Xtestu, Xtestu_ixs, Xtestu_counts) = np.unique(
-        Xtest, axis=0, return_inverse=True, return_counts=True
-    )
+    num_test = Xtest.shape[0]
+    (Xtestu, Xtestu_ixs) = np.unique(Xtest, axis=0, return_inverse=True)
     num_testu = Xtestu.shape[0]
 
     M_ = np.zeros((num_feats, num_feats))
@@ -1253,6 +1267,7 @@ def run_kl_independent(
     est_mu_S_all = est_mu_S_all[Xtestu_ixs, :]
     est_sigma_T_all = est_sigma_T_all[Xtestu_ixs, :]
     est_sigma_S_all = est_sigma_S_all[Xtestu_ixs, :]
+    assert est_mu_T_all.shape[0] == num_test
 
     debug_dict["predictor_T"] = predictor_T
     debug_dict["predictor_S"] = predictor_S
@@ -1260,13 +1275,15 @@ def run_kl_independent(
     est_var_T_all = est_sigma_T_all**2
     est_var_S_all = est_sigma_S_all**2
     if divergence == "forward":
-        F_0 = np.mean(est_var_S_all * np.log(est_sigma_S_all / est_sigma_T_all), axis=0)
-        F_1 = np.mean(est_var_S_all, axis=0)
-        F_2 = np.mean(est_mu_T_all * est_mu_S_all, axis=0)
-        F_3 = np.mean(est_mu_T_all, axis=0)
-        F_4 = np.mean(est_mu_S_all**2, axis=0)
-        F_5 = np.mean(est_mu_S_all, axis=0)
-        F_6 = np.ones(num_feats)
+        F_0 = np.mean(
+            Wtest * est_var_S_all * np.log(est_sigma_S_all / est_sigma_T_all), axis=0
+        )
+        F_1 = np.mean(Wtest * est_var_S_all, axis=0)
+        F_2 = np.mean(Wtest * est_mu_T_all * est_mu_S_all, axis=0)
+        F_3 = np.mean(Wtest * est_mu_T_all, axis=0)
+        F_4 = np.mean(Wtest * est_mu_S_all**2, axis=0)
+        F_5 = np.mean(Wtest * est_mu_S_all, axis=0)
+        F_6 = np.mean(Wtest * np.ones((num_test, num_feats)), axis=0)
 
         # Loop over features since independent not joint
         for fix in range(num_feats):
@@ -1321,25 +1338,25 @@ def run_kl_independent(
 
     elif divergence == "reverse":
 
-        C_1 = np.mean(est_mu_T_all, axis=0, keepdims=True)
-        C_2 = np.mean(est_mu_S_all, axis=0, keepdims=True)
+        C_1 = np.mean(Wtest * est_mu_T_all, axis=0, keepdims=True)
+        C_2 = np.mean(Wtest * est_mu_S_all, axis=0, keepdims=True)
         R_A = (
-            2 * np.sum(est_var_S_all, axis=0)
-            + 2 * np.sum((est_mu_S_all - C_2) ** 2, axis=0)
+            2 * np.sum(Wtest * est_var_S_all, axis=0)
+            + 2 * np.sum(Wtest * (est_mu_S_all - C_2) ** 2, axis=0)
             + 1e-8
         )
-        R_B = 2 * np.sum((C_1 - est_mu_T_all) * (est_mu_S_all - C_2), axis=0)
-        R_C = -2 * np.sum(est_var_T_all, axis=0)
+        R_B = 2 * np.sum(Wtest * (C_1 - est_mu_T_all) * (est_mu_S_all - C_2), axis=0)
+        R_C = -2 * np.sum(Wtest * est_var_T_all, axis=0)
         m_ = (-1 * R_B + np.sqrt(R_B**2 - 4 * R_A * R_C)) / (2 * R_A)
         b_ = C_1.squeeze() - m_ * C_2.squeeze()
         if debug:
-            R_1 = -2 * np.mean(est_var_T_all, axis=0)
-            R_2 = np.mean(est_var_S_all, axis=0)
-            R_3 = np.mean(est_mu_S_all**2, axis=0)
-            R_4 = 2 * np.mean(est_mu_S_all, axis=0)
-            R_5 = -2 * np.mean(est_mu_S_all * est_mu_T_all, axis=0)
-            R_6 = np.ones(num_feats)
-            R_7 = -2 * np.mean(est_mu_T_all, axis=0)
+            R_1 = -2 * np.mean(Wtest * est_var_T_all, axis=0)
+            R_2 = np.mean(Wtest * est_var_S_all, axis=0)
+            R_3 = np.mean(Wtest * est_mu_S_all**2, axis=0)
+            R_4 = 2 * np.mean(Wtest * est_mu_S_all, axis=0)
+            R_5 = -2 * np.mean(Wtest * est_mu_S_all * est_mu_T_all, axis=0)
+            R_6 = np.mean(Wtest * np.ones((num_test, num_feats)), axis=0)
+            R_7 = -2 * np.mean(Wtest * est_mu_T_all, axis=0)
 
             (r_1, r_2, r_3, r_4, r_5, r_6, r_7) = (
                 R_1[0],
@@ -1386,7 +1403,7 @@ def run_kl_independent(
 class ConDoAdapter:
     def __init__(
         self,
-        sampling: str = "proportional",
+        sampling: str = "product",
         transform_type: str = "location-scale",
         model_type: str = "linear",
         divergence: Union[None, str] = "reverse",
@@ -1398,7 +1415,7 @@ class ConDoAdapter:
         """
         Args:
             sampling: How to sample from dataset
-                ("source", "target", "proportional", "equal").
+                ("source", "target", "sum-proportional", "sum-equal", "product")
 
             transform_type: Whether to jointly transform all features ("affine"),
                 or to transform each feature independently ("location-scale").
@@ -1426,7 +1443,13 @@ class ConDoAdapter:
 
             debug: Whether to save state for debugging.
         """
-        if sampling not in ("source", "target", "proportional", "equal", "optimum"):
+        if sampling not in (
+            "source",
+            "target",
+            "sum-proportional",
+            "sum-equal",
+            "product",
+        ):
             raise ValueError(f"invalid sampling: {sampling}")
         if transform_type not in ("affine", "location-scale"):
             raise ValueError(f"invalid transform_type: {transform_type}")
@@ -1524,14 +1547,50 @@ class ConDoAdapter:
 
         if self.sampling == "source":
             Xtest = X_S
+            W = np.ones((num_S, 1)) / num_S
         elif self.sampling == "target":
             Xtest = X_T
-        elif self.sampling == "proportional":
+            W = np.ones((num_T, 1)) / num_T
+        elif self.sampling == "sum-proportional":
             Xtest = np.vstack([X_T, X_S])
-        elif self.sampling == "equal":
-            raise NotImplementedError(f"sampling: {self.sampling}")
-        elif self.sampling == "optimum":
-            raise NotImplementedError(f"sampling: {self.sampling}")
+            W = np.ones((num_S + num_T, 1)) / (num_S + num_T)
+        elif self.sampling == "sum-equal":
+            Xtest = np.vstack([X_T, X_S])
+            W = np.vstack([np.ones((num_T, 1)) / num_T, np.ones((num_S, 1)) / num_S])
+            W = W / np.sum(W)
+        elif self.sampling == "product":
+            Xtest = np.vstack([X_T, X_S])
+            if self.custom_kernel is not None:
+                target_kernel = self.custom_kernel()
+                source_kernel = self.custom_kernel()
+            else:
+                confounder_is_cat = (Xtest.dtype == bool) or not np.issubdtype(
+                    Xtest.dtype, np.number
+                )
+                # TODO: handle confounders of different dtypes
+                if confounder_is_cat:
+                    if num_confounders > 1:
+                        raise ValueError(
+                            f"product-sampling requires custom_kernel since "
+                            f"num_confounder = {num_confounders}, with at least "
+                            f"1 categorical confounder"
+                        )
+                    target_kernel = CatKernel()
+                    source_kernel = CatKernel()
+                else:
+                    target_kernel = 1.0 * RBF(length_scale=np.std(X_T, axis=0))
+                    source_kernel = 1.0 * RBF(length_scale=np.std(X_S, axis=0))
+
+            target_probs = target_kernel(X_T, Xtest)  # (num_T, num_test)
+            source_probs = source_kernel(X_S, Xtest)  # (num_S, num_test)
+            target_probs = np.sum(target_probs, axis=0)  # (num_test,)
+            target_probs = target_probs / np.sum(target_probs)
+            source_probs = np.sum(source_probs, axis=0)  # (num_test,)
+            source_probs = source_probs / np.sum(source_probs)
+            W = target_probs * source_probs
+            W = W / np.sum(W)
+            W = W.reshape(-1, 1)  # (num_test, 1)
+
         else:
             raise ValueError(f"sampling: {self.sampling}")
         num_test = Xtest.shape[0]
@@ -1543,6 +1602,7 @@ class ConDoAdapter:
                     X_S=X_S,
                     X_T=X_T,
                     Xtest=Xtest,
+                    Wtest=W,
                     custom_kernel=self.custom_kernel,
                     debug=self.debug,
                     verbose=self.verbose,
@@ -1555,6 +1615,7 @@ class ConDoAdapter:
                     X_S=X_S,
                     X_T=X_T,
                     Xtest=Xtest,
+                    Wtest=W,
                     custom_kernel=self.custom_kernel,
                     debug=self.debug,
                     verbose=self.verbose,
@@ -1572,6 +1633,7 @@ class ConDoAdapter:
                     X_S=X_S,
                     X_T=X_T,
                     Xtest=Xtest,
+                    Wtest=W,
                     divergence=self.divergence,
                     debug=self.debug,
                     verbose=self.verbose,
@@ -1591,6 +1653,7 @@ class ConDoAdapter:
                     X_S=X_S,
                     X_T=X_T,
                     Xtest=Xtest,
+                    Wtest=W,
                     model_type=self.model_type,
                     divergence=self.divergence,
                     custom_kernel=self.custom_kernel,

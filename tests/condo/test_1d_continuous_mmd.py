@@ -3,7 +3,7 @@ import numpy as np
 from condo import ConDoAdapter
 
 
-@pytest.mark.parametrize("sampling", ["source", "proportional", "target"])
+@pytest.mark.parametrize("sampling", ["source", "sum-proportional", "target"])
 @pytest.mark.parametrize(
     "transform_type",
     ["location-scale", "affine"],
@@ -11,7 +11,7 @@ from condo import ConDoAdapter
 def test_1d_continuous(sampling, transform_type):
     """Test 1d variable with 1d continuous confounder."""
 
-    if sampling == "proportional":
+    if sampling == "product":
         rtol = 0.1
     else:
         rtol = 1.0
