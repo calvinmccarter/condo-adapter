@@ -1560,6 +1560,8 @@ class ConDoAdapter:
             W = W / np.sum(W)
         elif self.sampling == "product":
             Xtest = np.vstack([X_T, X_S])
+            Xtestu, Xtestu_ixs = np.unique(Xtest, axis=0, return_inverse=True)
+            num_testu = Xtestu.shape[0]
             if self.custom_kernel is not None:
                 target_kernel = self.custom_kernel()
                 source_kernel = self.custom_kernel()
@@ -1581,11 +1583,13 @@ class ConDoAdapter:
                     target_kernel = 1.0 * RBF(length_scale=np.std(X_T, axis=0))
                     source_kernel = 1.0 * RBF(length_scale=np.std(X_S, axis=0))
 
-            target_probs = target_kernel(X_T, Xtest)  # (num_T, num_test)
-            source_probs = source_kernel(X_S, Xtest)  # (num_S, num_test)
-            target_probs = np.sum(target_probs, axis=0)  # (num_test,)
+            target_probs = target_kernel(X_T, Xtestu)  # (num_T, num_testu)
+            source_probs = source_kernel(X_S, Xtestu)  # (num_S, num_testu)
+            target_probs = np.sum(target_probs, axis=0)  # (num_testu,)
+            source_probs = np.sum(source_probs, axis=0)  # (num_testu,)
+            target_probs = target_probs[Xtestu_ixs]  # (num_test,)
+            source_probs = source_probs[Xtestu_ixs]  # (num_test,)
             target_probs = target_probs / np.sum(target_probs)
-            source_probs = np.sum(source_probs, axis=0)  # (num_test,)
             source_probs = source_probs / np.sum(source_probs)
             W = target_probs * source_probs
             W = W / np.sum(W)
