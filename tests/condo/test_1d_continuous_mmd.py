@@ -3,23 +3,22 @@ import numpy as np
 from condo import ConDoAdapter
 
 
-@pytest.mark.parametrize("sampling", ["source", "sum-proportional", "target"])
+@pytest.mark.parametrize(
+    "sampling", ["source", "sum-proportional", "target", "product"]
+)
 @pytest.mark.parametrize(
     "transform_type",
     ["location-scale", "affine"],
 )
-def test_1d_continuous(sampling, transform_type):
-    """Test 1d variable with 1d continuous confounder."""
+def test_1d_continuous_mmd(sampling, transform_type):
+    """Test MMD on 1d variable with 1d continuous confounder."""
 
-    if sampling == "product":
-        rtol = 0.1
-    else:
-        rtol = 1.0
+    rtol = 0.3
 
-    np.random.seed(0)
-    N = 60
-    N_T = 40
-    N_S = 20
+    rng = np.random.RandomState(0)
+    N = 100
+    N_T = 60
+    N_S = 40
 
     # How confounder X affects the distribution of T and S
     theta_m = 4
@@ -34,16 +33,16 @@ def test_1d_continuous(sampling, transform_type):
     true_m = 1.0 / batch_m
     true_b = -1 * batch_b / batch_m
 
-    X_T = np.sort(np.random.uniform(1, 8, size=(N_T, 1)))
-    X_S = np.sort(np.random.uniform(4, 8, size=(N_S, 1)))
+    X_T = np.sort(rng.uniform(0, 8, size=(N_T, 1)))
+    X_S = np.sort(rng.uniform(4, 8, size=(N_S, 1)))
 
     mu_T = theta_m * X_T + theta_b
     sigma_T = phi_m * X_T + phi_b
     mu_S = theta_m * X_S + theta_b
     sigma_S = phi_m * X_S + phi_b
 
-    T = np.random.normal(mu_T, sigma_T)
-    Strue = np.random.normal(mu_S, sigma_S)
+    T = rng.normal(mu_T, sigma_T)
+    Strue = rng.normal(mu_S, sigma_S)
     Sbatch = batch_m * Strue + batch_b
 
     cder = ConDoAdapter(
@@ -51,6 +50,7 @@ def test_1d_continuous(sampling, transform_type):
         transform_type=transform_type,
         model_type="empirical",
         divergence="mmd",
+        optim_kwargs={"epochs": 10, "alpha": 0.1, "beta": 0.99},
     )
 
     cder.fit(Sbatch, T, X_S, X_T)
