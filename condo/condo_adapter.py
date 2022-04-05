@@ -1463,9 +1463,9 @@ class ConDoAdapter:
             raise ValueError(f"invalid model_type: {model_type}")
         if divergence not in (None, "forward", "reverse", "mmd"):
             raise ValueError(f"invalid divergence: {divergence}")
-        if transform_type == "affine" and model_type not in ("linear", "empirical"):
-            raise ValueError(
-                f"incompatible (transform_type, model_type): {(transform_type, model_type)}"
+        if transform_type == "affine" and "gp" in model_type:
+            print(
+                f"warning: incompatible {(transform_type, model_type)} if >1 features"
             )
         if (model_type == "empirical") != (divergence == "mmd"):
             raise ValueError(
@@ -1535,6 +1535,14 @@ class ConDoAdapter:
 
         num_feats = S.shape[1]
         num_confounders = X_S.shape[1]
+        if (
+            self.transform_type == "affine"
+            and "gp" in self.model_type
+            and num_feats > 1
+        ):
+            raise ValueError(
+                f"incompatible (transform_type, model_type): {(transform_type, model_type)}"
+            )
         if num_confounders == 0:
             raise ValueError(f"called fit with num_confounders:{num_confounders}")
         if self.model_type != "linear":
@@ -1636,7 +1644,7 @@ class ConDoAdapter:
         else:
             assert self.divergence in ("forward", "reverse")
             if self.transform_type == "affine" and num_feats > 1:
-                assert self.model_type in ("linear",)
+                assert self.model_type in ("linear", "pogmm")
                 self.M_, self.b_, self.debug_dict_ = run_kl_linear_affine(
                     S=S,
                     T=T,
@@ -1649,7 +1657,7 @@ class ConDoAdapter:
                     verbose=self.verbose,
                     **self.optim_kwargs,
                 )
-            elif self.transform_type == "location-scale":
+            elif self.transform_type == "location-scale" or num_feats == 1:
                 # location-scale transformation treats features independently
                 assert self.model_type in (
                     "linear",
