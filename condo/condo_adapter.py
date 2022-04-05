@@ -862,7 +862,7 @@ def joint_pogmm_distr(
     all_est_precs = np.zeros((num_confounders, num_test, num_feats, num_feats))
     combined_mus = np.mean(D, axis=0, keepdims=True)
     glassoer = GraphicalLassoCV(verbose=verbose)
-    glassoer.fit(D[c_val_ixs, :])
+    glassoer.fit(D)
     combined_precs = glassoer.precision_
     combined_precs = np.expand_dims(combined_precs, 0)  # (1, num_feats, num_feats)
     for cix in range(num_confounders):
@@ -870,7 +870,7 @@ def joint_pogmm_distr(
         c_Xtest = Xtest_df.values[:, cix]
         c_vals, c_counts = np.unique(c_X, return_counts=True)
         c_est_mus = np.repeat(combined_mus, num_test, axis=0)
-        c_est_precs = np.repeat(combined_sigmas, num_test, axis=0)
+        c_est_precs = np.repeat(combined_precs, num_test, axis=0)
         for c_val, c_count in zip(c_vals, c_counts):
             if c_count >= min_values_per_category:
                 c_val_ixs = np.where(c_X == c_val)[0]
@@ -895,7 +895,6 @@ def joint_pogmm_distr(
         est_sigmas[n, :, :] = np.linalg.inv(est_mus_denom[n, :, :])
         est_mus[n, :] = est_sigmas[n, :, :] @ est_mus_numer[n, :]
     predictor = None  # TODO
-    # TODO- not tested
 
     return (est_mus, est_sigmas, predictor)
 
@@ -1061,6 +1060,90 @@ def homoscedastic_gp_distr(
         est_sigmas[:, fix] = est_sigma
 
     return (est_mus, est_sigmas, gper)
+
+
+def run_kl_pogmm_affine(
+    S: np.ndarray,
+    T: np.ndarray,
+    X_S: np.ndarray,
+    X_T: np.ndarray,
+    Xtest: np.ndarray,
+    Wtest: np.ndarray,
+    debug: bool,
+    verbose: Union[bool, int],
+    max_iter: int = 50,
+):
+    num_test = Xtest.shape[0]
+    num_feats = S.shape[1]
+    num_confounders = X_S.shape[1]
+
+    m_ = None
+    M_ = np.eye(num_feats, num_feats)
+    b_ = np.zeros((1, num_feats))
+
+    (Xtestu, Xtestu_idx, Xtestu_counts) = np.unique(
+        Xtest, axis=0, return_index=True, return_counts=True
+    )
+    Xtestu_counts = Xtestu_counts * Wtest[Xtestu_idx, 0]
+    num_testu = Xtestu.shape[0]
+
+    (est_mu_T_all, est_Sigma_T_all, predictor_T) = joint_pogmm_distr(
+        D=T,
+        X=X_T,
+        Xtest=Xtestu,
+        verbose=verbose,
+    )
+    Est_mu_T_all = [torch.from_numpy(est_mu_T_all[[i], :].T) for i in range(num_testu)]
+    Est_inv_Sigma_T_all = [
+        torch.from_numpy(np.linalg.inv(est_Sigma_T_all[i, :, :]))
+        for i in range(num_testu)
+    ]
+    (est_mu_S_all, est_Sigma_S_all, predictor_S) = joint_pogmm_distr(
+        D=S,
+        X=X_S,
+        Xtest=Xtestu,
+        verbose=verbose,
+    )
+    Est_mu_S_all = [torch.from_numpy(est_mu_S_all[[i], :].T) for i in range(num_testu)]
+    Est_Sigma_S_all = [
+        torch.from_numpy(est_Sigma_S_all[i, :, :]) for i in range(num_testu)
+    ]
+
+    def joint_reverse_kl_obj(mb):
+        M = mb[0:num_feats, :]  # (num_feats, num_feats)
+        b = (mb[num_feats, :]).view(-1, 1)  # (num_feats, 1)
+
+        obj = torch.tensor(0.0, requires_grad=True)
+        for n in range(num_testu):
+            # err_n has size (num_feats, 1)
+            err_n = M @ Est_mu_S_all[n] + b - Est_mu_T_all[n]
+            obj = (
+                obj
+                + Xtestu_counts[n]
+                * (err_n.T @ Est_inv_Sigma_T_all[n] @ err_n).squeeze()
+            )
+            obj = obj - torch.logdet(M @ Est_Sigma_S_all[n] @ M.T)
+            obj = obj + torch.einsum(
+                "ij,ji->", Est_inv_Sigma_T_all[n] @ M, Est_Sigma_S_all[n] @ M.T
+            )
+
+        return obj
+
+    mb_init = torch.from_numpy(np.vstack([M_, b_]))
+    res = tm.minimize(
+        joint_reverse_kl_obj,
+        mb_init,
+        method="l-bfgs",
+        max_iter=max_iter,
+        disp=verbose,
+    )
+    mb_opt = res.x.numpy()
+    M_ = mb_opt[0:num_feats, :]  # (num_feats, num_feats)
+    b_ = mb_opt[num_feats, :]  # (num_feats,)
+    debug_dict = {}
+    debug_dict["predictor_T"] = predictor_T
+    debug_dict["predictor_S"] = predictor_S
+    return (M_, b_, debug_dict)
 
 
 def run_kl_linear_affine(
@@ -1645,18 +1728,32 @@ class ConDoAdapter:
             assert self.divergence in ("forward", "reverse")
             if self.transform_type == "affine" and num_feats > 1:
                 assert self.model_type in ("linear", "pogmm")
-                self.M_, self.b_, self.debug_dict_ = run_kl_linear_affine(
-                    S=S,
-                    T=T,
-                    X_S=X_S,
-                    X_T=X_T,
-                    Xtest=Xtest,
-                    Wtest=W,
-                    divergence=self.divergence,
-                    debug=self.debug,
-                    verbose=self.verbose,
-                    **self.optim_kwargs,
-                )
+                if self.model_type == "linear":
+                    self.M_, self.b_, self.debug_dict_ = run_kl_linear_affine(
+                        S=S,
+                        T=T,
+                        X_S=X_S,
+                        X_T=X_T,
+                        Xtest=Xtest,
+                        Wtest=W,
+                        divergence=self.divergence,
+                        debug=self.debug,
+                        verbose=self.verbose,
+                        **self.optim_kwargs,
+                    )
+                elif self.model_type == "pogmm":
+                    assert self.divergence == "reverse"
+                    self.M_, self.b_, self.debug_dict_ = run_kl_pogmm_affine(
+                        S=S,
+                        T=T,
+                        X_S=X_S,
+                        X_T=X_T,
+                        Xtest=Xtest,
+                        Wtest=W,
+                        debug=self.debug,
+                        verbose=self.verbose,
+                        **self.optim_kwargs,
+                    )
             elif self.transform_type == "location-scale" or num_feats == 1:
                 # location-scale transformation treats features independently
                 assert self.model_type in (
