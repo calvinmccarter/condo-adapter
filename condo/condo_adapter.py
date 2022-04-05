@@ -640,12 +640,9 @@ def joint_linear_distr(
     ridger.fit(encodedX, D)
     predD = ridger.predict(encodedX)
     residD = predD - D
-    if num_D < 20 * (num_feats**2):
-        glassoer = GraphicalLassoCV(verbose=verbose)
-        glassoer.fit(residD)
-        est_Sigma = glassoer.covariance_
-    else:
-        est_Sigma = np.cov(residD, rowvar=False) + 1e-4 * np.eye(num_feats)
+    glassoer = GraphicalLassoCV(verbose=verbose)
+    glassoer.fit(residD)
+    est_Sigma = glassoer.covariance_
     predDtest = ridger.predict(encodedXtest)
     est_mus = predDtest
     predictor = ridger
@@ -1169,7 +1166,9 @@ def run_kl_linear_affine(
     (Xtestu, Xtestu_idx, Xtestu_counts) = np.unique(
         Xtest, axis=0, return_index=True, return_counts=True
     )
+    orig_sum_counts = np.sum(Xtestu_counts)
     Xtestu_counts = Xtestu_counts * Wtest[Xtestu_idx, 0]
+    Xtestu_counts = Xtestu_counts * (orig_sum_counts / np.sum(Xtestu_counts))
     num_testu = Xtestu.shape[0]
 
     (est_mu_T_all, est_Sigma_T, predictor_T) = joint_linear_distr(
@@ -1688,7 +1687,7 @@ class ConDoAdapter:
             source_probs = source_probs[Xtestu_ixs]  # (num_test,)
             target_probs = target_probs / np.sum(target_probs)
             source_probs = source_probs / np.sum(source_probs)
-            W = target_probs * source_probs
+            W = np.sqrt(target_probs * source_probs)
             W = W / np.sum(W)
             W = W.reshape(-1, 1)  # (num_test, 1)
 
