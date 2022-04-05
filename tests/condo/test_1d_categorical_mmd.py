@@ -3,7 +3,9 @@ import numpy as np
 from condo import ConDoAdapter
 
 
-@pytest.mark.parametrize("sampling", ["source", "sum-proportional", "target"])
+@pytest.mark.parametrize(
+    "sampling", ["source", "sum-proportional", "target", "product"]
+)
 @pytest.mark.parametrize(
     "transform_type",
     ["location-scale", "affine"],
@@ -11,39 +13,46 @@ from condo import ConDoAdapter
 def test_1d_categorical_mmd(sampling, transform_type):
     """Test MMD on 1d variable with 1d categorical confounder."""
 
-    if sampling == "sum-proportional":
-        rtol = 0.1
-    else:
-        rtol = 1.0
+    rtol = 0.3
 
-    np.random.seed(0)
-    N = 60
-    N_T = 40
-    N_S = 20
+    rng = np.random.RandomState(0)
+    N = 200
+    N_T = 100
+    N_S = 100
 
     # How confounder X affects the distribution of T and S
-    theta_m = 4
-    theta_b = 1
-    phi_m = 1
-    phi_b = 1
+    mu_hotdog = 10.0
+    sigma_hotdog = 1.0
+    mu_not = 5.0
+    sigma_not = 2.0
 
     # How batch effect affects S
     batch_m = 2
-    batch_b = -5
+    batch_b = 5
     # The true batch correction from Sbatch to S
     true_m = 1.0 / batch_m
     true_b = -1 * batch_b / batch_m
 
-    X_T = np.sort(np.random.uniform(1, 8, size=(N_T, 1)))
-    X_S = np.sort(np.random.uniform(4, 8, size=(N_S, 1)))
+    n_hotdogT = 75
+    n_notT = 25
+    n_hotdogS = 25
+    n_notS = 75
+    X_T = np.array([["hotdog"] * n_hotdogT + ["not"] * n_notT]).reshape((N_T, 1))
+    X_S = np.array([["hotdog"] * n_hotdogS + ["not"] * n_notS]).reshape((N_S, 1))
 
-    mu_T = theta_m * X_T + theta_b
-    sigma_T = phi_m * X_T + phi_b
-    mu_S = theta_m * X_S + theta_b
-    sigma_S = phi_m * X_S + phi_b
+    Strue = np.nan * np.ones((N_S, 1))
+    T = np.nan * np.ones((N_T, 1))
+    Strue[np.where(X_S[:, 0] == "hotdog"), 0] = rng.normal(
+        mu_hotdog, sigma_hotdog, size=(n_hotdogS)
+    )
+    T[np.where(X_T[:, 0] == "hotdog"), 0] = rng.normal(
+        mu_hotdog, sigma_hotdog, size=(n_hotdogT)
+    )
+    Strue[np.where(X_S[:, 0] == "not"), 0] = rng.normal(
+        mu_not, sigma_not, size=(n_notS)
+    )
+    T[np.where(X_T[:, 0] == "not"), 0] = rng.normal(mu_not, sigma_not, size=(n_notT))
 
-    T = np.random.normal(mu_T, sigma_T)
-    Strue = np.random.normal(mu_S, sigma_S)
     Sbatch = batch_m * Strue + batch_b
 
     cder = ConDoAdapter(

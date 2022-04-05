@@ -1415,7 +1415,7 @@ class ConDoAdapter:
         """
         Args:
             sampling: How to sample from dataset
-                ("source", "target", "sum-proportional", "sum-equal", "product")
+                ("source", "target", "sum-proportional", "sum", "product")
 
             transform_type: Whether to jointly transform all features ("affine"),
                 or to transform each feature independently ("location-scale").
@@ -1447,7 +1447,7 @@ class ConDoAdapter:
             "source",
             "target",
             "sum-proportional",
-            "sum-equal",
+            "sum",
             "product",
         ):
             raise ValueError(f"invalid sampling: {sampling}")
@@ -1562,7 +1562,7 @@ class ConDoAdapter:
         elif self.sampling == "sum-proportional":
             Xtest = np.vstack([X_T, X_S])
             W = np.ones((num_S + num_T, 1)) / (num_S + num_T)
-        elif self.sampling == "sum-equal":
+        elif self.sampling == "sum":
             Xtest = np.vstack([X_T, X_S])
             W = np.vstack([np.ones((num_T, 1)) / num_T, np.ones((num_S, 1)) / num_S])
             W = W / np.sum(W)
