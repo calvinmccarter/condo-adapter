@@ -17,7 +17,14 @@ with open(os.path.join(root_dir, "condo/__init__.py"), "r") as f:
             break
 
 PACKAGES = find_packages(exclude=("tests.*", "tests"))
-
+install_reqs = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "scikit-learn",
+    "torch>=1.4.0",
+    "torchmin",
+]
 setup(
     name="condo",
     version=version,
@@ -26,7 +33,7 @@ setup(
     author="Calvin McCarter",
     author_email="mccarter.calvin@gmail.com",
     packages=PACKAGES,
-    install_requires=["torch>=1.4.0"],
+    install_requires=install_reqs,
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/calvinmccarter/condo-adapter",
