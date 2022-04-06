@@ -77,12 +77,17 @@ def run_mmd_independent(
         (Xtestu, Xtestu_idx, Xtestu_counts) = np.unique(
             Xtest, axis=0, return_index=True, return_counts=True
         )
+        orig_sum_counts = np.sum(Xtestu_counts)
         Xtestu_counts = Xtestu_counts * Wtest[Xtestu_idx, 0]
+        Xtestu_counts = Xtestu_counts * (orig_sum_counts / np.sum(Xtestu_counts))
         num_testu = Xtestu.shape[0]
     else:
         Xtestu = Xtest
         num_testu = num_test
-        Xtestu_counts = np.ones(num_testu) * Wtest[:, 0]
+        Xtestu_counts = np.ones(num_testu)
+        orig_sum_counts = np.sum(Xtestu_counts)
+        Xtestu_counts = Xtestu_counts * Wtest[:, 0]
+        Xtestu_counts = Xtestu_counts * (orig_sum_counts / np.sum(Xtestu_counts))
 
     if custom_kernel is not None:
         target_kernel = custom_kernel()
@@ -460,12 +465,17 @@ def run_mmd_affine(
         (Xtestu, Xtestu_idx, Xtestu_counts) = np.unique(
             Xtest, axis=0, return_index=True, return_counts=True
         )
+        orig_sum_counts = np.sum(Xtestu_counts)
         Xtestu_counts = Xtestu_counts * Wtest[Xtestu_idx, 0]
+        Xtestu_counts = Xtestu_counts * (orig_sum_counts / np.sum(Xtestu_counts))
         num_testu = Xtestu.shape[0]
     else:
         Xtestu = Xtest
         num_testu = num_test
-        Xtestu_counts = np.ones(num_testu) * Wtest[:, 0]
+        Xtestu_counts = np.ones(num_testu)
+        orig_sum_counts = np.sum(Xtestu_counts)
+        Xtestu_counts = Xtestu_counts * Wtest[:, 0]
+        Xtestu_counts = Xtestu_counts * (orig_sum_counts / np.sum(Xtestu_counts))
 
     if custom_kernel is not None:
         target_kernel = custom_kernel()
@@ -1104,7 +1114,9 @@ def run_kl_pogmm_affine(
     (Xtestu, Xtestu_idx, Xtestu_counts) = np.unique(
         Xtest, axis=0, return_index=True, return_counts=True
     )
+    orig_sum_counts = np.sum(Xtestu_counts)
     Xtestu_counts = Xtestu_counts * Wtest[Xtestu_idx, 0]
+    Xtestu_counts = Xtestu_counts * (orig_sum_counts / np.sum(Xtestu_counts))
     num_testu = Xtestu.shape[0]
 
     (est_mu_T_all, est_Sigma_T_all, predictor_T) = joint_pogmm_distr(
