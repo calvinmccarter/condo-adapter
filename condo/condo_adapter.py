@@ -932,10 +932,14 @@ def heteroscedastic_gp_distr(
         elif confounder_is_cat:
             first_kernel = CatKernel()
         else:
-            min_ls = np.sqrt(np.mean((X - X.T) ** 2))
-            first_kernel = ConstantKernel(1, (1e-3, 1e3)) * RBF(
-                10 * min_ls, (min_ls, 100 * min_ls)
-            )
+            if num_confounders == 1:
+                # TODO: generalize to multiple confounders
+                min_ls = np.sqrt(np.mean((X - X.T) ** 2))
+                first_kernel = ConstantKernel(1, (1e-3, 1e3)) * RBF(
+                    10 * min_ls, (min_ls, 100 * min_ls)
+                )
+            else:
+                first_kernel = ConstantKernel(1, (1e-3, 1e3)) * RBF(1.0, (0.1, 100.0))
         if confounder_is_cat:
             noise_dict = {}
             Xulist = list(np.unique(X, axis=0))
@@ -956,7 +960,6 @@ def heteroscedastic_gp_distr(
         else:
             prototypes = KMeans(n_clusters=10).fit(X).cluster_centers_
             # hyperparams for HeteroscedasticKernel are from gp_extras-examples
-            # TODO: X - X.T will be incorrect with multiple confounders
             kernel = first_kernel + HeteroscedasticKernel.construct(
                 prototypes,
                 1e-3,
@@ -973,8 +976,28 @@ def heteroscedastic_gp_distr(
             )
 
         gper.fit(X, D[:, fix])
+        if np.isnan(gper.alpha_).any():
+            if not confounder_is_cat:
+                kernel = first_kernel + HeteroscedasticKernel.construct(
+                    prototypes,
+                    1e-3,
+                    (1e-10, 50.0),
+                    gamma=X.var(),
+                    gamma_bounds="fixed",
+                )
+                alpha = 1e-3
+                gper = GaussianProcessRegressor(
+                    kernel=kernel,
+                    alpha=alpha,
+                    normalize_y=False,
+                    n_restarts_optimizer=9,
+                )
+                gper.fit(X, D[:, fix])
+            if np.isnan(gper.alpha_).any():
+                print("warning: GP regression may have failed.")
 
         (est_mu, est_sigma) = gper.predict(Xtest, return_std=True)
+        est_sigma[np.isnan(est_sigma)] = np.nanmean(est_sigma)
         est_mus[:, fix] = est_mu
         est_sigmas[:, fix] = est_sigma
 
