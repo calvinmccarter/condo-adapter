@@ -20,7 +20,7 @@ In Bibtex format:
   doi = {10.48550/ARXIV.2203.12720},
   url = {https://arxiv.org/abs/2203.12720},
   author = {McCarter, Calvin},
-  title = {Towards All-Purpose Domain Adaptation Under Confounding},
+  title = {Towards Backwards-Compatible Data with Confounded Domain Adaptation},
   publisher = {arXiv},
   year = {2022},
 }
