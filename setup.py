@@ -23,13 +23,12 @@ install_reqs = [
     "scipy",
     "scikit-learn",
     "torch>=1.4.0",
-    "torchmin",
 ]
 setup(
     name="condo",
     version=version,
     description="Library to perform confounded domain adaptation.",
-    license="apache-2.0",
+    license="by-nc-sa-4.0",
     author="Calvin McCarter",
     author_email="mccarter.calvin@gmail.com",
     packages=PACKAGES,
