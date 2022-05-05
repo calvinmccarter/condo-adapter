@@ -33,6 +33,7 @@ def run_mmd_independent(
     T: np.ndarray,
     debug: bool,
     verbose: Union[bool, int],
+    length_scale: Union[float, str] = "dynamic",
     epochs: int = 100,
     batch_size: int = 16,
     alpha: float = 1e-2,
@@ -99,14 +100,30 @@ def run_mmd_independent(
                 adaptedSsample = (S_torch[srcsample_ixs, fix]).reshape(
                     -1, 1
                 ) @ M.T + b.reshape(1, -1)
-                length_scale = (
-                    torch.mean((Tsample - adaptedSsample) ** 2).detach().numpy()
-                )
+                if length_scale == "dynamic":
+                    lscale = (
+                        torch.mean((Tsample - adaptedSsample) ** 2).detach().numpy()
+                    )
+                elif length_scale == "target":
+                    lscale = torch.var(Tsample).detach().numpy()
+                elif length_scale == "source":
+                    lscale = torch.var(S_torch[srcsample_ixs, fix]).detach().numpy()
+                elif length_scale == "initialMSE":
+                    lscale = (
+                        torch.mean(
+                            (Tsample - (S_torch[srcsample_ixs, fix]).reshape(-1, 1))
+                            ** 2
+                        )
+                        .detach()
+                        .numpy()
+                    )
+                else:
+                    lscale = length_scale
                 factor = 1.0 / terms_per_batch
                 obj = obj - 2 * factor * torch.sum(
                     torch.exp(
                         -1.0
-                        / (2 * length_scale)
+                        / (2 * lscale)
                         * (
                             (Tsample @ Tsample.T).diag().unsqueeze(1)
                             - 2 * Tsample @ adaptedSsample.T
@@ -117,7 +134,7 @@ def run_mmd_independent(
                 obj = obj + factor * torch.sum(
                     torch.exp(
                         -1.0
-                        / (2 * length_scale)
+                        / (2 * lscale)
                         * (
                             (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(1)
                             - 2 * adaptedSsample @ adaptedSsample.T
@@ -166,14 +183,17 @@ def run_mmd_independent(
                 adaptedSsample = (S_torch[srcsample_ixs, fix]).reshape(
                     -1, 1
                 ) @ M.T + b.reshape(1, -1)
-                length_scale = (
-                    torch.mean((Tsample - adaptedSsample) ** 2).detach().numpy()
-                )
+                if length_scale == "dynamic":
+                    lscale = (
+                        torch.mean((Tsample - adaptedSsample) ** 2).detach().numpy()
+                    )
+                else:
+                    lscale = length_scale
                 factor = 1.0 / terms_per_batch
                 obj = obj - 2 * factor * torch.sum(
                     torch.exp(
                         -1.0
-                        / (2 * length_scale)
+                        / (2 * lscale)
                         * (
                             (Tsample @ Tsample.T).diag().unsqueeze(1)
                             - 2 * Tsample @ adaptedSsample.T
@@ -184,7 +204,7 @@ def run_mmd_independent(
                 obj = obj + factor * torch.sum(
                     torch.exp(
                         -1.0
-                        / (2 * length_scale)
+                        / (2 * lscale)
                         * (
                             (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(1)
                             - 2 * adaptedSsample @ adaptedSsample.T
