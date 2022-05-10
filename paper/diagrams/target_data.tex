@@ -1,0 +1,88 @@
+%\documentclass{article}
+\documentclass[class=minimal,border=4pt]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{patterns}
+\newcommand\actfill{1.0}
+\newcommand\actcol{yellow}
+\newcommand\tikscale{0.32}
+\newcommand{\smiley}{\tikz[baseline=-0.75ex,black]{
+\filldraw[fill=orange!10] circle (2mm);
+\node[fill,circle,inner sep=0.5pt] (left eye) at (135:0.8mm) {};
+\node[fill,circle,inner sep=0.5pt] (right eye) at (45:0.8mm) {};
+\draw[-] (-145:0.9mm) arc (-120:-60:1.5mm);
+}
+}
+\newcommand{\frownie}{\tikz[baseline=-0.75ex,black]{
+\filldraw[fill=red!20] circle (2mm);
+\node[fill,circle,inner sep=0.5pt] (left eye) at (135:0.8mm) {};
+\node[fill,circle,inner sep=0.5pt] (right eye) at (45:0.8mm) {};
+\draw[-] (-145:0.9mm) arc (120:60:1.5mm);
+}
+}
+
+\pgfdeclarepatternformonly{dark lines}{\pgfqpoint{-1pt}{-1pt}}{\pgfqpoint{12pt}{12pt}}{\pgfqpoint{12pt}{12pt}}%
+{
+  \pgfsetlinewidth{3pt}
+  \pgfpathmoveto{\pgfqpoint{0pt}{0pt}}
+  \pgfpathlineto{\pgfqpoint{12pt}{12pt}}
+  \pgfusepath{stroke}
+}
+
+   
+\begin{document}
+\begin{tikzpicture}[
+fill opacity=.6,draw opacity=1,scale=\tikscale,
+emptynode/.style={square}
+]
+%\fill[opacity=\actfill,\actcol] (1,8) rectangle (3,7);
+%\fill[opacity=\actfill,\actcol] (3,7) rectangle (5,6);
+%\fill[opacity=\actfill,\actcol] (0,5) rectangle (1,4);
+%\fill[opacity=\actfill,\actcol] (2,5) rectangle (6,4);
+%\fill[opacity=\actfill,\actcol] (0,3) rectangle (2,2);
+%\fill[opacity=\actfill,\actcol] (3,2) rectangle (4,1);
+%\fill[opacity=\actfill,\actcol] (5,1) rectangle (6,0);
+%\fill[opacity=\actfill,\actcol] (0,0) rectangle (6,8);
+\fill[fill=blue!20, very thick] (0,0) rectangle (6,12);
+\draw[ystep=1cm,xstep=1cm,white,very thin] (0,0) grid (6,12);
+\draw[color=blue, very thick] (0,0) rectangle (6,12);
+
+\fill[fill=yellow!20, very thick] (9,0) rectangle (10,12);
+\draw[ystep=1cm,xstep=1cm,white,very thin] (9,0) grid (10,12);
+\draw[color=yellow, very thick] (9,0) rectangle (10,12);
+\foreach \i in {0,2,3,5,6,7,9,10,11}
+{
+\node at (9.5,\i+0.5) [fill opacity=1,color=red] {$\times$};
+}
+\foreach \i in {1,4,8}
+{
+\node at (9.5,\i+0.5) [fill opacity=1,color=green] {$+$};
+}
+
+\fill[fill=violet!20, very thick] (13,0) rectangle (14,12);
+\draw[ystep=1cm,xstep=1cm,white,very thin] (13,0) grid (14,12);
+\draw[color=violet, very thick] (13,0) rectangle (14,12);
+\foreach \i in {2,3,5,7,8,11}
+{
+\node at (13.5,\i+0.5) [fill opacity=1,color=green] {$\bullet$};
+}
+\foreach \i in {0,1,4,6,9,10}
+{
+\node at (13.5,\i+0.5) [fill opacity=1,color=red] {$\star$};
+}
+\draw[black,ultra thick,->] plot[smooth,tension=1] coordinates {(4.0,12.5) (6.75, 13.0) (9.5,12.5)};
+\draw[black,ultra thick,->] plot[smooth,tension=1] coordinates {(2.0,12.5) (7.0, 13.5) (12.5,12.5)};
+
+%\draw[ystep=1cm,xstep=1cm,gray,very thin] (9,0) grid (12,8);
+
+%\draw[ultra thick,-] (3,0) -- (3,8);
+%\draw[thin,-] (0,1) -- (6,1);
+%\draw[thin,-] (0,2) -- (6,2);
+%\draw[thin,-] (0,3) -- (6,3);
+%\draw[thin,-] (0,4) -- (6,4);
+%\draw[thin,-] (0,5) -- (6,5);
+%\draw[thin,-] (0,6) -- (6,6);
+%\draw[thin,-] (0,7) -- (6,7);
+%\draw[magenta,ultra thick,->] plot[smooth,tension=1] coordinates {(1.25,7.5) (1.4,0.5) (4.55,7.5) (4.7,0.5)};
+\end{tikzpicture}
+\end{document}
+
