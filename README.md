@@ -36,6 +36,8 @@ You can install the toolbox through PyPI with:
 pip install condo
 ```
 
+Note: If you have issues with importing `torchmin`, you may need to install from source, as shown below. Or you can try re-installing [pytorch-minimize](https://github.com/rfeinman/pytorch-minimize) from source. 
+
 ### Installation from source
 
 After cloning this repo, install the dependencies on the command-line via:
