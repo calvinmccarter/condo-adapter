@@ -23,6 +23,7 @@ install_reqs = [
     "scipy",
     "scikit-learn",
     "torch>=1.4.0",
+    "pytorch-minimize>=0.0.2",
 ]
 setup(
     name="condo",
