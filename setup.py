@@ -20,10 +20,11 @@ PACKAGES = find_packages(exclude=("tests.*", "tests"))
 install_reqs = [
     "numpy",
     "pandas",
+    "POT",
+    "pytorch-minimize>=0.0.2",
     "scipy",
     "scikit-learn",
     "torch>=1.4.0",
-    "pytorch-minimize>=0.0.2",
 ]
 setup(
     name="condo",
