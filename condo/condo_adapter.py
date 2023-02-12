@@ -563,7 +563,7 @@ def run_mmd_affine(
                 adaptedSsample = adaptedSsample * lscaler
 
                 factor = Xtestu_counts[cix] / terms_per_batch
-                obj = obj - 2 * factor * torch.sum(
+                haha = -2 * factor * torch.sum(
                     torch.exp(
                         -1.0
                         / 2.0
@@ -573,8 +573,7 @@ def run_mmd_affine(
                             + (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(0)
                         )
                     )
-                )
-                obj = obj + factor * torch.sum(
+                ) + factor * torch.sum(
                     torch.exp(
                         -1.0
                         / 2.0
@@ -585,6 +584,19 @@ def run_mmd_affine(
                         )
                     )
                 )
+                xx = torch.mm(Tsample, Tsample.T)  # n x n
+                yy = torch.mm(adaptedSsample, adaptedSsample.T)  # n x n
+                zz = torch.mm(Tsample, adaptedSsample.T)
+                rx = xx.diag().unsqueeze(0).expand_as(xx)
+                ry = yy.diag().unsqueeze(0).expand_as(yy)
+                dxx = rx.T + rx - 2.0 * xx
+                dyy = ry.T + ry - 2.0 * yy
+                dxy = rx.T + ry - 2.0 * zz
+                XX = torch.exp(-0.5 * dxx)
+                YY = torch.exp(-0.5 * dyy)
+                XY = torch.exp(-0.5 * dxy)
+                obj = obj + factor * torch.sum(XX + YY - 2 * XY)
+                print("old", haha, "new", torch.sum(YY - 2 * XY))
 
             obj.backward()
             with torch.no_grad():
