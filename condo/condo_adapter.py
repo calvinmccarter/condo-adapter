@@ -2,6 +2,7 @@ from copy import deepcopy
 from typing import Union
 
 import math
+from tqdm.auto import tqdm
 import numpy as np
 import pandas as pd
 import torch
@@ -41,7 +42,7 @@ def run_mmd_independent(
     custom_kernel,
     length_scale: Union[float, str] = "dynamic",
     epochs: int = 100,
-    batch_size: int = 16,
+    batch_size: int = 8,
     alpha: float = 1e-2,
     beta: float = 0.9,
 ):
@@ -125,7 +126,7 @@ def run_mmd_independent(
         best_M = np.eye(1, 1)
         best_b = np.zeros(1)
 
-        for epoch in range(full_epochs + 1):
+        for epoch in tqdm(range(full_epochs + 1)):
             epoch_start_M = M.detach().numpy()
             epoch_start_b = b.detach().numpy()
             Mz = torch.zeros(1, 1)
@@ -183,7 +184,6 @@ def run_mmd_independent(
                         )
                     else:
                         lscale = length_scale
-
                     obj = obj - 2 * factor * torch.sum(
                         torch.exp(
                             -1.0
@@ -267,7 +267,7 @@ def run_mmd_independent_fast(
     debug: bool,
     verbose: Union[bool, int],
     epochs: int = 100,
-    batch_size: int = 16,
+    batch_size: int = 4,
     alpha: float = 1e-2,
     beta: float = 0.9,
 ):
@@ -329,14 +329,14 @@ def run_mmd_independent_fast(
 
     M = torch.ones(num_feats, dtype=torch.float64, requires_grad=True)
     b = torch.zeros(num_feats, dtype=torch.float64, requires_grad=True)
-    batches = round(num_S * num_T / (batch_size * batch_size))
+    batches = math.ceil(num_S * num_T / (batch_size * batch_size)) #round(num_S * num_T / (batch_size * batch_size))
     full_epochs = math.floor(epochs)
     frac_epochs = epochs % 1
     terms_per_batch = num_testu * batch_size * batch_size
     obj_history = []
     best_M = np.ones(num_feats)
     best_b = np.zeros(num_feats)
-    for epoch in range(full_epochs + 1):
+    for epoch in tqdm(range(full_epochs + 1)):
         epoch_start_M = M.detach().numpy()
         epoch_start_b = b.detach().numpy()
         Mz = torch.zeros(num_feats)
@@ -372,18 +372,18 @@ def run_mmd_independent_fast(
                 lscaler = torch.from_numpy(invroot_length_scale).view(1, -1)
                 scaled_Tsample = Tsample * lscaler
                 scaled_adaptedSsample = adaptedSsample * lscaler
-
+                
                 factor = Xtestu_counts[cix] / terms_per_batch
                 obj = obj - 2 * factor * torch.sum(
                     torch.exp(
                         -1.0
                         / 2.0
                         * (
-                            (scaled_Tsample @ scaled_Tsample.T).diag().unsqueeze(1)
-                            - 2 * scaled_Tsample @ scaled_adaptedSsample.T
-                            + (scaled_adaptedSsample @ scaled_adaptedSsample.T)
-                            .diag()
-                            .unsqueeze(0)
+                            torch.diagonal(torch.bmm(scaled_Tsample.T.unsqueeze(-1), \
+                                                     torch.transpose(scaled_Tsample.T.unsqueeze(-1), 1, 2)), dim1=1, dim2=2).unsqueeze(2)
+                            - torch.mul(torch.bmm(scaled_Tsample.T.unsqueeze(-1), torch.transpose(scaled_adaptedSsample.T.unsqueeze(-1), 1, 2)), 2)
+                            + torch.diagonal(torch.bmm(scaled_adaptedSsample.T.unsqueeze(-1), \
+                                                       torch.transpose(scaled_adaptedSsample.T.unsqueeze(-1), 1, 2)), dim1=1, dim2=2).unsqueeze(1)
                         )
                     )
                 )
@@ -392,16 +392,42 @@ def run_mmd_independent_fast(
                         -1.0
                         / 2.0
                         * (
-                            (scaled_adaptedSsample @ scaled_adaptedSsample.T)
-                            .diag()
-                            .unsqueeze(1)
-                            - 2 * scaled_adaptedSsample @ scaled_adaptedSsample.T
-                            + (scaled_adaptedSsample @ scaled_adaptedSsample.T)
-                            .diag()
-                            .unsqueeze(0)
+                            torch.diagonal(torch.bmm(scaled_adaptedSsample.T.unsqueeze(-1), \
+                                                     torch.transpose(scaled_adaptedSsample.T.unsqueeze(-1), 1, 2)), dim1=1, dim2=2).unsqueeze(2)
+                            - torch.mul(torch.bmm(scaled_adaptedSsample.T.unsqueeze(-1), torch.transpose(scaled_adaptedSsample.T.unsqueeze(-1), 1, 2)), 2)
+                            + torch.diagonal(torch.bmm(scaled_adaptedSsample.T.unsqueeze(-1), \
+                                                       torch.transpose(scaled_adaptedSsample.T.unsqueeze(-1), 1, 2)), dim1=1, dim2=2).unsqueeze(1)
                         )
                     )
                 )
+                # obj = obj - 2 * factor * torch.sum(
+                #     torch.exp(
+                #         -1.0
+                #         / 2.0
+                #         * (
+                #             (scaled_Tsample @ scaled_Tsample.T).diag().unsqueeze(1)
+                #             - 2 * scaled_Tsample @ scaled_adaptedSsample.T
+                #             + (scaled_adaptedSsample @ scaled_adaptedSsample.T)
+                #             .diag()
+                #             .unsqueeze(0)
+                #         )
+                #     )
+                # )
+                # obj = obj + factor * torch.sum(
+                #     torch.exp(
+                #         -1.0
+                #         / 2.0
+                #         * (
+                #             (scaled_adaptedSsample @ scaled_adaptedSsample.T)
+                #             .diag()
+                #             .unsqueeze(1)
+                #             - 2 * scaled_adaptedSsample @ scaled_adaptedSsample.T
+                #             + (scaled_adaptedSsample @ scaled_adaptedSsample.T)
+                #             .diag()
+                #             .unsqueeze(0)
+                #         )
+                #     )
+                # )
 
             obj.backward()
             with torch.no_grad():
@@ -409,7 +435,6 @@ def run_mmd_independent_fast(
                 bz = beta * bz + b.grad
                 M -= alpha * Mz
                 b -= alpha * bz
-                print(torch.mean(torch.abs(M.grad)))
             M.grad.zero_()
             b.grad.zero_()
             if verbose >= 2:
@@ -451,7 +476,7 @@ def run_mmd_affine(
     debug: bool,
     verbose: Union[bool, int],
     epochs: int = 100,
-    batch_size: int = 16,
+    batch_size: int = 512,
     alpha: float = 1e-2,
     beta: float = 0.9,
 ):
@@ -527,7 +552,7 @@ def run_mmd_affine(
     obj_history = []
     best_M = np.eye(num_feats, num_feats)
     best_b = np.zeros(num_feats)
-    for epoch in range(full_epochs + 1):
+    for epoch in tqdm(range(full_epochs + 1)):
         epoch_start_M = M.detach().numpy()
         epoch_start_b = b.detach().numpy()
         Mz = torch.zeros(num_feats, num_feats)
@@ -563,40 +588,54 @@ def run_mmd_affine(
                 adaptedSsample = adaptedSsample * lscaler
 
                 factor = Xtestu_counts[cix] / terms_per_batch
-                haha = -2 * factor * torch.sum(
+                obj = obj - 2 * factor * torch.sum(
                     torch.exp(
                         -1.0
                         / 2.0
                         * (
-                            (Tsample @ Tsample.T).diag().unsqueeze(1)
-                            - 2 * Tsample @ adaptedSsample.T
-                            + (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(0)
-                        )
-                    )
-                ) + factor * torch.sum(
-                    torch.exp(
-                        -1.0
-                        / 2.0
-                        * (
-                            (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(1)
-                            - 2 * adaptedSsample @ adaptedSsample.T
-                            + (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(0)
+                            torch.diagonal(torch.bmm(Tsample.T.unsqueeze(-1), \
+                                                     torch.transpose(Tsample.T.unsqueeze(-1), 1, 2)), dim1=1, dim2=2).unsqueeze(2)
+                            - torch.mul(torch.bmm(Tsample.T.unsqueeze(-1), torch.transpose(adaptedSsample.T.unsqueeze(-1), 1, 2)), 2)
+                            + torch.diagonal(torch.bmm(adaptedSsample.T.unsqueeze(-1), \
+                                                       torch.transpose(adaptedSsample.T.unsqueeze(-1), 1, 2)), dim1=1, dim2=2).unsqueeze(1)
                         )
                     )
                 )
-                xx = torch.mm(Tsample, Tsample.T)  # n x n
-                yy = torch.mm(adaptedSsample, adaptedSsample.T)  # n x n
-                zz = torch.mm(Tsample, adaptedSsample.T)
-                rx = xx.diag().unsqueeze(0).expand_as(xx)
-                ry = yy.diag().unsqueeze(0).expand_as(yy)
-                dxx = rx.T + rx - 2.0 * xx
-                dyy = ry.T + ry - 2.0 * yy
-                dxy = rx.T + ry - 2.0 * zz
-                XX = torch.exp(-0.5 * dxx)
-                YY = torch.exp(-0.5 * dyy)
-                XY = torch.exp(-0.5 * dxy)
-                obj = obj + factor * torch.sum(XX + YY - 2 * XY)
-                print("old", haha, "new", torch.sum(YY - 2 * XY))
+                obj = obj + factor * torch.sum(
+                    torch.exp(
+                        -1.0
+                        / 2.0
+                        * (
+                            torch.diagonal(torch.bmm(adaptedSsample.T.unsqueeze(-1), \
+                                                     torch.transpose(adaptedSsample.T.unsqueeze(-1), 1, 2)), dim1=1, dim2=2).unsqueeze(2)
+                            - torch.mul(torch.bmm(adaptedSsample.T.unsqueeze(-1), torch.transpose(adaptedSsample.T.unsqueeze(-1), 1, 2)), 2)
+                            + torch.diagonal(torch.bmm(adaptedSsample.T.unsqueeze(-1), \
+                                                       torch.transpose(adaptedSsample.T.unsqueeze(-1), 1, 2)), dim1=1, dim2=2).unsqueeze(1)
+                        )
+                    )
+                )
+                # obj = obj - 2 * factor * torch.sum(
+                #     torch.exp(
+                #         -1.0
+                #         / 2.0
+                #         * (
+                #             (Tsample @ Tsample.T).diag().unsqueeze(1)
+                #             - 2 * Tsample @ adaptedSsample.T
+                #             + (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(0)
+                #         )
+                #     )
+                # )
+                # obj = obj + factor * torch.sum(
+                #     torch.exp(
+                #         -1.0
+                #         / 2.0
+                #         * (
+                #             (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(1)
+                #             - 2 * adaptedSsample @ adaptedSsample.T
+                #             + (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(0)
+                #         )
+                #     )
+                # )
 
             obj.backward()
             with torch.no_grad():
@@ -1557,6 +1596,7 @@ class ConDoAdapter:
         self,
         sampling: str = "product",
         transform_type: str = "location-scale",
+        fast: bool = False,
         model_type: str = "linear",
         divergence: Union[None, str] = "reverse",
         custom_kernel=None,
@@ -1631,6 +1671,7 @@ class ConDoAdapter:
 
         self.sampling = sampling
         self.transform_type = transform_type
+        self.fast = fast
         self.model_type = model_type
         self.divergence = divergence
         self.custom_kernel = custom_kernel
@@ -1779,18 +1820,31 @@ class ConDoAdapter:
                     **self.optim_kwargs,
                 )
             elif self.transform_type == "location-scale":
-                self.M_, self.b_, self.debug_dict_ = run_mmd_independent(
-                    S=S,
-                    T=T,
-                    X_S=X_S,
-                    X_T=X_T,
-                    Xtest=Xtest,
-                    Wtest=W,
-                    custom_kernel=self.custom_kernel,
-                    debug=self.debug,
-                    verbose=self.verbose,
-                    **self.optim_kwargs,
-                )
+                if not self.fast:
+                    self.M_, self.b_, self.debug_dict_ = run_mmd_independent(
+                        S=S,
+                        T=T,
+                        X_S=X_S,
+                        X_T=X_T,
+                        Xtest=Xtest,
+                        Wtest=W,
+                        custom_kernel=self.custom_kernel,
+                        debug=self.debug,
+                        verbose=self.verbose,
+                        **self.optim_kwargs,
+                    )
+                else:
+                    self.M_, self.b_, self.debug_dict_ = run_mmd_independent_fast(
+                        S=S,
+                        T=T,
+                        X_S=X_S,
+                        X_T=X_T,
+                        Xtest=Xtest,
+                        custom_kernel=self.custom_kernel,
+                        debug=self.debug,
+                        verbose=self.verbose,
+                        **self.optim_kwargs,
+                    )
             else:
                 assert False
         else:
