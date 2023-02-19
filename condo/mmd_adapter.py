@@ -306,33 +306,6 @@ def run_mmd_affine(
             scaled_adaptedSsample = adaptedSsample * lscaler
 
             factor = 1.0 / terms_per_batch
-            """
-            for fix in range(num_feats):
-                Tsample_fix = Tsample[:, fix].reshape(-1, 1)
-                adaptedSsample_fix = adaptedSsample[:, fix].reshape(-1, 1)
-                obj = obj - 2 * factor * torch.sum(
-                    torch.exp(
-                        -1.0
-                        / (2 * length_scale_np[fix])
-                        * (
-                            (Tsample_fix @ Tsample_fix.T).diag().unsqueeze(1)
-                            - 2 * Tsample_fix @ adaptedSsample_fix.T
-                            + (adaptedSsample_fix @ adaptedSsample_fix.T).diag().unsqueeze(0)
-                        )
-                    )
-                )
-                obj = obj + factor * torch.sum(
-                    torch.exp(
-                        -1.0
-                        / (2 * length_scale_np[fix])
-                        * (
-                            (adaptedSsample_fix @ adaptedSsample_fix.T).diag().unsqueeze(1)
-                            - 2 * adaptedSsample_fix @ adaptedSsample_fix.T
-                            + (adaptedSsample_fix @ adaptedSsample_fix.T).diag().unsqueeze(0)
-                        )
-                    )
-                )
-            """
             obj = obj - 2 * factor * torch.sum(
                 torch.exp(
                     -1.0
