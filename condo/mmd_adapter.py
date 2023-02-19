@@ -229,6 +229,7 @@ def run_mmd_independent(
 def run_mmd_affine(
     S: np.ndarray,
     T: np.ndarray,
+    transform_type: str,
     debug: bool,
     verbose: Union[bool, int],
     epochs: int = 100,
@@ -262,8 +263,12 @@ def run_mmd_affine(
     T_torch = torch.from_numpy(T)
     S_torch = torch.from_numpy(S)
 
-    M = torch.eye(num_feats, num_feats, dtype=torch.float64, requires_grad=True)
-    b = torch.zeros(num_feats, dtype=torch.float64, requires_grad=True)
+    if transform_type == "location-scale":
+        M = torch.ones(num_feats, dtype=torch.float64, requires_grad=True)
+        b = torch.zeros(num_feats, dtype=torch.float64, requires_grad=True)
+    elif transform_type == "affine":
+        M = torch.eye(num_feats, num_feats, dtype=torch.float64, requires_grad=True)
+        b = torch.zeros(num_feats, dtype=torch.float64, requires_grad=True)
     batches = math.ceil(num_S * num_T / (batch_size * batch_size))
     full_epochs = math.floor(epochs)
     frac_epochs = epochs % 1
@@ -274,8 +279,8 @@ def run_mmd_affine(
     for epoch in range(full_epochs + 1):
         epoch_start_M = M.detach().numpy()
         epoch_start_b = b.detach().numpy()
-        Mz = torch.zeros(num_feats, num_feats)
-        bz = torch.zeros(num_feats)
+        Mz = torch.zeros_like(M)
+        bz = torch.zeros_like(b)
         objs = np.zeros(batches)
         if epoch == full_epochs:
             cur_batches = round(frac_epochs * batches)
@@ -286,7 +291,12 @@ def run_mmd_affine(
             srcsample_ixs = rng.choice(num_S, size=batch_size, replace=True).tolist()
             obj = torch.tensor(0.0, requires_grad=True)
             Tsample = T_torch[tgtsample_ixs, :]
-            adaptedSsample = S_torch[srcsample_ixs, :] @ M.T + b.reshape(1, -1)
+            if transform_type == "location-scale":
+                adaptedSsample = S_torch[srcsample_ixs, :] * M.reshape(
+                    1, -1
+                ) + b.reshape(1, -1)
+            elif transform_type == "affine":
+                adaptedSsample = S_torch[srcsample_ixs, :] @ M.T + b.reshape(1, -1)
             length_scale_np = (
                 torch.mean((Tsample - adaptedSsample) ** 2, axis=0).detach().numpy()
             )
@@ -296,6 +306,33 @@ def run_mmd_affine(
             scaled_adaptedSsample = adaptedSsample * lscaler
 
             factor = 1.0 / terms_per_batch
+            """
+            for fix in range(num_feats):
+                Tsample_fix = Tsample[:, fix].reshape(-1, 1)
+                adaptedSsample_fix = adaptedSsample[:, fix].reshape(-1, 1)
+                obj = obj - 2 * factor * torch.sum(
+                    torch.exp(
+                        -1.0
+                        / (2 * length_scale_np[fix])
+                        * (
+                            (Tsample_fix @ Tsample_fix.T).diag().unsqueeze(1)
+                            - 2 * Tsample_fix @ adaptedSsample_fix.T
+                            + (adaptedSsample_fix @ adaptedSsample_fix.T).diag().unsqueeze(0)
+                        )
+                    )
+                )
+                obj = obj + factor * torch.sum(
+                    torch.exp(
+                        -1.0
+                        / (2 * length_scale_np[fix])
+                        * (
+                            (adaptedSsample_fix @ adaptedSsample_fix.T).diag().unsqueeze(1)
+                            - 2 * adaptedSsample_fix @ adaptedSsample_fix.T
+                            + (adaptedSsample_fix @ adaptedSsample_fix.T).diag().unsqueeze(0)
+                        )
+                    )
+                )
+            """
             obj = obj - 2 * factor * torch.sum(
                 torch.exp(
                     -1.0
@@ -324,7 +361,6 @@ def run_mmd_affine(
                     )
                 )
             )
-
             obj.backward()
             with torch.no_grad():
                 Mz = beta * Mz + M.grad
@@ -359,6 +395,8 @@ def run_mmd_affine(
                     )
                 break
         obj_history.append(last_obj)
+    if best_M.ndim == 1:
+        best_M = np.diag(best_M)
     return (best_M, best_b, None)
 
 
@@ -411,22 +449,14 @@ class MMDAdapter:
 
         num_feats = S.shape[1]
 
-        if self.transform_type == "affine":
-            self.M_, self.b_, self.debug_dict_ = run_mmd_affine(
-                S=S,
-                T=T,
-                debug=self.debug,
-                verbose=self.verbose,
-                **self.optim_kwargs,
-            )
-        else:
-            self.M_, self.b_, self.debug_dict_ = run_mmd_independent(
-                S=S,
-                T=T,
-                debug=self.debug,
-                verbose=self.verbose,
-                **self.optim_kwargs,
-            )
+        self.M_, self.b_, self.debug_dict_ = run_mmd_affine(
+            S=S,
+            T=T,
+            transform_type=self.transform_type,
+            debug=self.debug,
+            verbose=self.verbose,
+            **self.optim_kwargs,
+        )
 
         if self.transform_type == "location-scale":
             self.M_inv_ = np.diag(1.0 / np.diag(self.M_))
