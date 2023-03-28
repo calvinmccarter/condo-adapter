@@ -5,27 +5,183 @@ import math
 import numpy as np
 import pandas as pd
 import torch
-import torchmin as tm
-import sklearn.utils as skut
 
-from sklearn.cluster import KMeans
-from sklearn.compose import make_column_transformer
-from sklearn.compose import make_column_selector
-from sklearn.covariance import GraphicalLassoCV
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import (
-    ConstantKernel,
-    RBF,
-    WhiteKernel,
-)
-from sklearn.linear_model import RidgeCV
-from sklearn.preprocessing import OneHotEncoder
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
 
-from condo.heteroscedastic_kernel import HeteroscedasticKernel
-from condo.cat_kernels import (
-    CatKernel,
-    HeteroscedasticCatKernel,
-)
+
+class MMDDataset(Dataset):
+    def __init__(self, S: np.ndarray, T: np.ndarray):
+        self.S = torch.from_numpy(S.astype(np.float32))
+        self.T = torch.from_numpy(T.astype(np.float32))
+        all_idxs = np.arange(self.S.shape[0] * self.T.shape[0])
+        self.idx_S = all_idxs % S.shape[0]
+        self.idx_T = all_idxs // S.shape[0]
+
+    def __len__(self):
+        return self.S.shape[0] * self.T.shape[0]
+
+    def __getitem__(self, idx):
+        """
+        rng = np.random.RandomState(42)  # XXX make faster
+        tgtsample_ix = rng.choice(self.T.shape[0], size=1)
+        srcsample_ix = rng.choice(self.S.shape[0], size=1)
+        """
+        srcsample_ix = self.idx_S[idx]
+        tgtsample_ix = self.idx_T[idx]
+        return self.S[srcsample_ix, :], self.T[tgtsample_ix, :]
+
+
+def MMDLoss(adaptedSsample, Tsample, length_scale: np.ndarray, reduction="mean"):
+    invroot_length_scale = 1.0 / np.sqrt(length_scale_np)
+    lscaler = torch.from_numpy(invroot_length_scale).view(1, -1)
+    scaled_Tsample = Tsample * lscaler
+    scaled_adaptedSsample = adaptedSsample * lscaler
+
+    if reduction == "mean":
+        assert adaptedSsample.shape[0] == Tsample.shape[0]
+        factor = 1.0 / adaptedSsample.shape[0]
+    elif reduction == "sum":
+        factor = 1.0
+    elif reduction == "product":
+        factor = 1.0 / (adaptedSsample.shape[0] * Tsample.shape[0])
+    else:
+        raise ValueError(f"MMDLoss invalid reduction={reduction}")
+
+    obj = -2 * factor * torch.sum(
+        torch.exp(
+            -1.0
+            / 2.0
+            * (
+                (scaled_Tsample @ scaled_Tsample.T).diag().unsqueeze(1)
+                - 2 * scaled_Tsample @ scaled_adaptedSsample.T
+                + (scaled_adaptedSsample @ scaled_adaptedSsample.T).diag().unsqueeze(0)
+            )
+        )
+    ) + factor * torch.sum(
+        torch.exp(
+            -1.0
+            / 2.0
+            * (
+                (scaled_adaptedSsample @ scaled_adaptedSsample.T).diag().unsqueeze(1)
+                - 2 * scaled_adaptedSsample @ scaled_adaptedSsample.T
+                + (scaled_adaptedSsample @ scaled_adaptedSsample.T).diag().unsqueeze(0)
+            )
+        )
+    )
+    return obj
+
+
+class MMDLinearAdapterModule(torch.nn.Module):
+    def __init__(
+        self,
+        transform_type: str,
+        num_feats: int,
+        device=None,
+        dtype=None,
+    ) -> None:
+        factory_kwargs = {"device": device, "dtype": dtype}
+        super().__init__()
+        self.transform_type = transform_type
+        self.num_feats = num_feats
+
+        if transform_type == "location-scale":
+            self.M = torch.nn.Parameter(torch.empty(num_feats, **factory_kwargs))
+            self.b = torch.nn.Parameter(torch.empty(num_feats, **factory_kwargs))
+
+        elif transform_type == "affine":
+            self.M = torch.nn.Parameter(
+                torch.empty((num_feats, num_feats), **factory_kwargs)
+            )
+            self.b = torch.nn.Parameter(torch.empty(num_feats, **factory_kwargs))
+        else:
+            raise ValueError(f"invalid transform_type:{transform_type}")
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        if self.transform_type == "location-scale":
+            torch.nn.init.ones_(self.M)
+            torch.nn.init.zeros_(self.b)
+        elif self.transform_type == "affine":
+            torch.nn.init.eye_(self.M)
+            torch.nn.init.zeros_(self.b)
+
+    def forward(self, S: torch.Tensor) -> torch.Tensor:
+        if self.transform_type == "location-scale":
+            adaptedSsample = S * self.M.reshape(1, -1) + self.b.reshape(1, -1)
+        elif self.transform_type == "affine":
+            adaptedSsample = S @ M.T + b.reshape(1, -1)
+        return adaptedSsample
+
+    def extra_repr(self) -> str:
+        return "transform_type={}, num_feats={}".format(
+            self.transform_type,
+            self.num_feats,
+        )
+
+
+def run_mmd_new(
+    S: np.ndarray,
+    T: np.ndarray,
+    transform_type: str,
+    debug: bool,
+    verbose: Union[bool, int],
+    epochs: int = 100,
+    batch_size: int = 16,
+    alpha: float = 1e-2,
+    beta: float = 0.9,
+):
+    """
+    Args:
+        debug: is ignored
+
+        epochs: number of times to pass through all observed confounder values.
+
+        batch_size: number of samples to draw from S and T per confounder value.
+            kernel matrix will be of size (batch_size, batch_size).
+            The number of batches per epoch is num_S*num_T / (batch_size ** 2).
+
+        alpha: gradient descent learning rate (ie step size).
+
+        beta: Nesterov momentum
+
+    Returns:
+        M: (num_feats, num_feats)
+        b: (num_feats,)
+        debug_tuple: (m_plot, b_plot, mb_objs) or None
+    """
+    num_feats = S.shape[1]
+    dataset = MMDDataset(S, T)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    module = MMDLinearAdapterModule(transform_type=transform_type, num_feats=num_feats)
+    optimizer = torch.optim.AdamW(
+        module.parameters(), lr=alpha, weight_decay=1e-3, eps=1e-5
+    )
+    length_scale = np.var(T, axis=0)
+
+    for epoch in range(epochs):
+        size = len(dataloader.dataset)
+        for batch, (Ssample, Tsample) in enumerate(dataloader):
+            # Compute prediction and loss
+            adaptedSsample = module(Ssample)
+            # TODO: use product reduction
+            loss = MMDLoss(adaptedSsample, Tsample, length_scale)
+
+            # Backpropagation
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            if verbose and batch == 0:
+                loss, current = loss.item(), (batch + 1) * len(Ssample)
+                print(f"epoch:{epoch} loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+
+            # TODO - early stopping
+    best_M = module.M.detach().numpy()
+    best_b = module.b.detach().numpy()
+    if best_M.ndim == 1:
+        best_M = np.diag(best_M)
+    return (best_M, best_b, None)
 
 
 def run_mmd(
@@ -224,7 +380,7 @@ class MMDAdapter:
 
         num_feats = S.shape[1]
 
-        self.M_, self.b_, self.debug_dict_ = run_mmd(
+        self.M_, self.b_, self.debug_dict_ = run_mmd_new(
             S=S,
             T=T,
             transform_type=self.transform_type,
