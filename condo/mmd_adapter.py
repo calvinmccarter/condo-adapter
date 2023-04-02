@@ -9,11 +9,13 @@ import torch
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 
+from condo.utils import EarlyStopping
+
 
 class MMDDataset(Dataset):
     def __init__(self, S: np.ndarray, T: np.ndarray):
-        self.S = torch.from_numpy(S.astype(np.float32))
-        self.T = torch.from_numpy(T.astype(np.float32))
+        self.S = torch.from_numpy(S)
+        self.T = torch.from_numpy(T)
         all_idxs = np.arange(self.S.shape[0] * self.T.shape[0])
         self.idx_S = all_idxs % S.shape[0]
         self.idx_T = all_idxs // S.shape[0]
@@ -33,7 +35,7 @@ class MMDDataset(Dataset):
 
 
 def MMDLoss(adaptedSsample, Tsample, length_scale: np.ndarray, reduction="mean"):
-    invroot_length_scale = 1.0 / np.sqrt(length_scale_np)
+    invroot_length_scale = 1.0 / np.sqrt(length_scale)
     lscaler = torch.from_numpy(invroot_length_scale).view(1, -1)
     scaled_Tsample = Tsample * lscaler
     scaled_adaptedSsample = adaptedSsample * lscaler
@@ -120,215 +122,99 @@ class MMDLinearAdapterModule(torch.nn.Module):
         )
 
 
-def run_mmd_new(
-    S: np.ndarray,
-    T: np.ndarray,
-    transform_type: str,
-    debug: bool,
-    verbose: Union[bool, int],
-    epochs: int = 100,
-    batch_size: int = 16,
-    alpha: float = 1e-2,
-    beta: float = 0.9,
-):
-    """
-    Args:
-        debug: is ignored
-
-        epochs: number of times to pass through all observed confounder values.
-
-        batch_size: number of samples to draw from S and T per confounder value.
-            kernel matrix will be of size (batch_size, batch_size).
-            The number of batches per epoch is num_S*num_T / (batch_size ** 2).
-
-        alpha: gradient descent learning rate (ie step size).
-
-        beta: Nesterov momentum
-
-    Returns:
-        M: (num_feats, num_feats)
-        b: (num_feats,)
-        debug_tuple: (m_plot, b_plot, mb_objs) or None
-    """
-    num_feats = S.shape[1]
-    dataset = MMDDataset(S, T)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    module = MMDLinearAdapterModule(transform_type=transform_type, num_feats=num_feats)
-    optimizer = torch.optim.AdamW(
-        module.parameters(), lr=alpha, weight_decay=1e-3, eps=1e-5
-    )
-    length_scale = np.var(T, axis=0)
-
-    for epoch in range(epochs):
-        size = len(dataloader.dataset)
-        for batch, (Ssample, Tsample) in enumerate(dataloader):
-            # Compute prediction and loss
-            adaptedSsample = module(Ssample)
-            # TODO: use product reduction
-            loss = MMDLoss(adaptedSsample, Tsample, length_scale)
-
-            # Backpropagation
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            if verbose and batch == 0:
-                loss, current = loss.item(), (batch + 1) * len(Ssample)
-                print(f"epoch:{epoch} loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
-
-            # TODO - early stopping
-    best_M = module.M.detach().numpy()
-    best_b = module.b.detach().numpy()
-    if best_M.ndim == 1:
-        best_M = np.diag(best_M)
-    return (best_M, best_b, None)
-
-
 def run_mmd(
     S: np.ndarray,
     T: np.ndarray,
     transform_type: str,
-    debug: bool,
     verbose: Union[bool, int],
     epochs: int = 100,
     batch_size: int = 16,
-    alpha: float = 1e-2,
-    beta: float = 0.9,
+    learning_rate: float = 1e-2,
+    weight_decay: float = 1e-3,
+    patience: int = 5,
+    length_scale_method: str = "target",
 ):
     """
     Args:
-        debug: is ignored
-
         epochs: number of times to pass through all observed confounder values.
 
         batch_size: number of samples to draw from S and T per confounder value.
             kernel matrix will be of size (batch_size, batch_size).
             The number of batches per epoch is num_S*num_T / (batch_size ** 2).
 
-        alpha: gradient descent learning rate (ie step size).
+        learning_rate: AdamW learning rate (ie step size).
 
-        beta: Nesterov momentum
+        weight_decay: AdamW weight_decay
+
+        patience: early-stopping patience in epochs
 
     Returns:
         M: (num_feats, num_feats)
         b: (num_feats,)
-        debug_tuple: (m_plot, b_plot, mb_objs) or None
     """
-    rng = np.random.RandomState(42)
-    num_S = S.shape[0]
-    num_T = T.shape[0]
+    S = S.astype(np.float32)
+    T = T.astype(np.float32)
     num_feats = S.shape[1]
-    T_torch = torch.from_numpy(T)
-    S_torch = torch.from_numpy(S)
+    train_dataset = MMDDataset(S, T)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    model = MMDLinearAdapterModule(transform_type=transform_type, num_feats=num_feats)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=learning_rate, weight_decay=weight_decay, eps=1e-5
+    )
+    early_stopping = EarlyStopping(patience=3)
 
-    if transform_type == "location-scale":
-        M = torch.ones(num_feats, dtype=torch.float64, requires_grad=True)
-        b = torch.zeros(num_feats, dtype=torch.float64, requires_grad=True)
-    elif transform_type == "affine":
-        M = torch.eye(num_feats, num_feats, dtype=torch.float64, requires_grad=True)
-        b = torch.zeros(num_feats, dtype=torch.float64, requires_grad=True)
-    batches = math.ceil(num_S * num_T / (batch_size * batch_size))
-    full_epochs = math.floor(epochs)
-    frac_epochs = epochs % 1
-    terms_per_batch = batch_size * batch_size
-    obj_history = []
-    best_M = np.eye(num_feats, num_feats)
-    best_b = np.zeros(num_feats)
-    for epoch in range(full_epochs + 1):
-        epoch_start_M = M.detach().numpy()
-        epoch_start_b = b.detach().numpy()
-        Mz = torch.zeros_like(M)
-        bz = torch.zeros_like(b)
-        objs = np.zeros(batches)
-        if epoch == full_epochs:
-            cur_batches = round(frac_epochs * batches)
-        else:
-            cur_batches = batches
-        for batch in range(cur_batches):
-            tgtsample_ixs = rng.choice(num_T, size=batch_size, replace=True).tolist()
-            srcsample_ixs = rng.choice(num_S, size=batch_size, replace=True).tolist()
-            obj = torch.tensor(0.0, requires_grad=True)
-            Tsample = T_torch[tgtsample_ixs, :]
-            if transform_type == "location-scale":
-                adaptedSsample = S_torch[srcsample_ixs, :] * M.reshape(
-                    1, -1
-                ) + b.reshape(1, -1)
-            elif transform_type == "affine":
-                adaptedSsample = S_torch[srcsample_ixs, :] @ M.T + b.reshape(1, -1)
-            length_scale_np = (
-                torch.mean((Tsample - adaptedSsample) ** 2, axis=0).detach().numpy()
+    if length_scale_method == "target":
+        length_scale = np.var(T, axis=0)
+    elif length_scale_method == "source":
+        length_scale = np.var(S, axis=0)
+    elif length_scale_method in ("initialMSE", "dynamic"):
+        n_samples = max(T.shape[0], S.shape[0])
+        rng = np.random.RandomState(42)
+        T_ls_ixs = rng.choice(T.shape[0], size=n_samples, replace=True)
+        S_ls_ixs = rng.choice(S.shape[0], size=n_samples, replace=True)
+        length_scale = np.mean((T[T_ls_ixs, :] - S[S_ls_ixs, :]) ** 2, axis=0)
+    else:
+        raise ValueError(f"Invalid length_scale_method: {length_scale_method}")
+
+    for epoch in range(epochs):
+        n_samples = len(train_loader.dataset)
+        n_batches = len(train_loader)
+        model.train()
+        for batch_ix, (Ssample, Tsample) in enumerate(train_loader):
+            adaptedSsample = model(Ssample)
+            loss = MMDLoss(adaptedSsample, Tsample, length_scale, reduction="product")
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            if verbose >= 2 and batch_ix % (max(n_batches, 5) // 5) == 0:
+                # print progress ~5 times per epoch
+                loss = loss.item()
+                print(f"epoch:{epoch} loss: {loss:>7f}  [{batch_ix}/{n_batches}]")
+
+        model.eval()
+        adaptedS = model(torch.from_numpy(S))
+        val_loss = MMDLoss(
+            adaptedS, torch.from_numpy(T), length_scale, reduction="product"
+        )
+        early_stopping(val_loss, model)
+        if verbose and early_stopping.early_stop:
+            print(
+                f"Early stopping @ {epoch}: {val_loss:.2f} vs {early_stopping.loss_min:.2f}"
             )
-            invroot_length_scale = 1.0 / np.sqrt(length_scale_np)
-            lscaler = torch.from_numpy(invroot_length_scale).view(1, -1)
-            scaled_Tsample = Tsample * lscaler
-            scaled_adaptedSsample = adaptedSsample * lscaler
-
-            factor = 1.0 / terms_per_batch
-            obj = obj - 2 * factor * torch.sum(
-                torch.exp(
-                    -1.0
-                    / 2.0
-                    * (
-                        (scaled_Tsample @ scaled_Tsample.T).diag().unsqueeze(1)
-                        - 2 * scaled_Tsample @ scaled_adaptedSsample.T
-                        + (scaled_adaptedSsample @ scaled_adaptedSsample.T)
-                        .diag()
-                        .unsqueeze(0)
-                    )
-                )
+            break
+        if length_scale_method == "dynamic":
+            adaptedSnp = adaptedS.detach().numpy()
+            length_scale = np.mean(
+                (T[T_ls_ixs, :] - adaptedSnp[S_ls_ixs, :]) ** 2, axis=0
             )
-            obj = obj + factor * torch.sum(
-                torch.exp(
-                    -1.0
-                    / 2.0
-                    * (
-                        (scaled_adaptedSsample @ scaled_adaptedSsample.T)
-                        .diag()
-                        .unsqueeze(1)
-                        - 2 * scaled_adaptedSsample @ scaled_adaptedSsample.T
-                        + (scaled_adaptedSsample @ scaled_adaptedSsample.T)
-                        .diag()
-                        .unsqueeze(0)
-                    )
-                )
-            )
-            obj.backward()
-            with torch.no_grad():
-                Mz = beta * Mz + M.grad
-                bz = beta * bz + b.grad
-                M -= alpha * Mz
-                b -= alpha * bz
-            M.grad.zero_()
-            b.grad.zero_()
-            if verbose >= 2:
-                print(
-                    f"epoch:{epoch}/{epochs} batch:{batch}/{cur_batches} obj:{obj:.5f}"
-                )
-            objs[batch] = obj.detach().numpy()
 
-        last_obj = np.mean(objs)
-        if verbose >= 1:
-            print(f"epoch:{epoch} {objs[0]:.5f}->{objs[-1]:.5f} avg:{last_obj:.5f}")
-
-        if epoch > 0 and last_obj < np.min(np.array(obj_history)):
-            best_M = epoch_start_M
-            best_b = epoch_start_b
-        if epoch == full_epochs and full_epochs == 0:
-            best_M = M.detach().numpy()
-            best_b = b.detach().numpy()
-
-        if len(obj_history) >= 10:
-            if last_obj > np.max(np.array(obj_history[-10:])):
-                # Terminate early if worse than all previous 10 iterations
-                if verbose >= 1:
-                    print(
-                        f"Terminating {(alpha, beta)} after epoch {epoch}: {last_obj:.5f}"
-                    )
-                break
-        obj_history.append(last_obj)
+    model.load_state_dict(early_stopping.state_dict)
+    best_M = model.M.detach().numpy()
+    best_b = model.b.detach().numpy()
     if best_M.ndim == 1:
         best_M = np.diag(best_M)
-    return (best_M, best_b, None)
+    return (best_M, best_b)
 
 
 class MMDAdapter:
@@ -337,7 +223,6 @@ class MMDAdapter:
         transform_type: str = "location-scale",
         optim_kwargs: dict = None,
         verbose: Union[bool, int] = 1,
-        debug: bool = False,
     ):
         """
         Args:
@@ -349,12 +234,10 @@ class MMDAdapter:
                 observation.
 
             optim_kwargs: Dict containing args for optimization.
-                If mmd, valid keys are "epochs", "batch_size",
-                "alpha" (learning rate), and "beta" (momentum).
+                Valid keys are "epochs", "batch_size", "learning_rate",
+                "weight_decay", "patience", and "length_scale_method".
 
             verbose: Bool or integer that indicates the verbosity.
-
-            debug: Whether to save state for debugging.
         """
         if transform_type not in ("affine", "location-scale"):
             raise ValueError(f"invalid transform_type: {transform_type}")
@@ -362,7 +245,6 @@ class MMDAdapter:
         self.transform_type = transform_type
         self.optim_kwargs = deepcopy(optim_kwargs) or {}
         self.verbose = verbose
-        self.debug = debug
 
     def fit(
         self,
@@ -370,21 +252,17 @@ class MMDAdapter:
         T: np.ndarray,
     ):
         """
-
-        Modifies M_, b_, possibly m_plot_, b_plot_, mb_objs_
-
+        Modifies M_, b_, M_inv_
         """
         num_S = S.shape[0]
         num_T = T.shape[0]
         assert S.shape[1] == T.shape[1]
 
         num_feats = S.shape[1]
-
-        self.M_, self.b_, self.debug_dict_ = run_mmd_new(
+        self.M_, self.b_ = run_mmd(
             S=S,
             T=T,
             transform_type=self.transform_type,
-            debug=self.debug,
             verbose=self.verbose,
             **self.optim_kwargs,
         )
@@ -400,10 +278,9 @@ class MMDAdapter:
         self,
         S,
     ):
-
+        adaptedS = S @ self.M_.T + self.b_.reshape(1, -1)
         # same as adaptedS = (self.M_ @ S.T).T + self.b_.reshape(1, -1)
         # self.b_.reshape(1, -1) has shape (1, num_feats)
-        adaptedS = S @ self.M_.T + self.b_.reshape(1, -1)
         return adaptedS
 
     def inverse_transform(
