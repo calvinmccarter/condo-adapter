@@ -12,9 +12,10 @@ class EarlyStopping:
         self.loss_min = np.Inf
         self.state_dict = None
 
-    def __call__(self, loss, model):
+    def __call__(self, loss, model, epoch):
         if loss < self.loss_min:
             self.loss_min = loss
+            self.epoch_min = epoch
             self.state_dict = deepcopy(model.state_dict())
             self.counter = 0
         else:

@@ -161,7 +161,7 @@ def run_mmd(
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=learning_rate, weight_decay=weight_decay, eps=1e-5
     )
-    early_stopping = EarlyStopping(patience=3)
+    early_stopping = EarlyStopping(patience=patience)
 
     if length_scale_method == "target":
         length_scale = np.var(T, axis=0)
@@ -197,10 +197,11 @@ def run_mmd(
         val_loss = MMDLoss(
             adaptedS, torch.from_numpy(T), length_scale, reduction="product"
         )
-        early_stopping(val_loss, model)
+        early_stopping(val_loss, model, epoch)
         if verbose and early_stopping.early_stop:
+            (best_loss, best_epoch) = early_stopping.loss_min, early_stopping.epoch_min
             print(
-                f"Early stopping @ {epoch}: {val_loss:.2f} vs {early_stopping.loss_min:.2f}"
+                f"Early stopping: {val_loss:.2f}@{epoch} vs {best_loss:.2f}@{best_epoch}"
             )
             break
         if length_scale_method == "dynamic":
