@@ -6,10 +6,17 @@ import numpy as np
 import pandas as pd
 import torch
 
-from torch.utils.data import Dataset
-from torch.utils.data import DataLoader
+from torch.utils.data import (
+    DataLoader,
+    Dataset,
+    WeightedRandomSampler,
+)
 
-from condo.utils import EarlyStopping
+from condo.utils import (
+    EarlyStopping,
+    MMDLinearAdapterModule,
+    MMDLoss,
+)
 
 
 class MMDDataset(Dataset):
@@ -24,102 +31,10 @@ class MMDDataset(Dataset):
         return self.S.shape[0] * self.T.shape[0]
 
     def __getitem__(self, idx):
-        """
-        rng = np.random.RandomState(42)  # XXX make faster
-        tgtsample_ix = rng.choice(self.T.shape[0], size=1)
-        srcsample_ix = rng.choice(self.S.shape[0], size=1)
-        """
-        srcsample_ix = self.idx_S[idx]
-        tgtsample_ix = self.idx_T[idx]
+        (srcsample_ix, tgtsample_ix) = np.unravel_index(
+            idx, (self.S.shape[0], self.T.shape[0])
+        )
         return self.S[srcsample_ix, :], self.T[tgtsample_ix, :]
-
-
-def MMDLoss(adaptedSsample, Tsample, length_scale: np.ndarray, reduction="mean"):
-    invroot_length_scale = 1.0 / np.sqrt(length_scale)
-    lscaler = torch.from_numpy(invroot_length_scale).view(1, -1)
-    scaled_Tsample = Tsample * lscaler
-    scaled_adaptedSsample = adaptedSsample * lscaler
-
-    if reduction == "mean":
-        assert adaptedSsample.shape[0] == Tsample.shape[0]
-        factor = 1.0 / adaptedSsample.shape[0]
-    elif reduction == "sum":
-        factor = 1.0
-    elif reduction == "product":
-        factor = 1.0 / (adaptedSsample.shape[0] * Tsample.shape[0])
-    else:
-        raise ValueError(f"MMDLoss invalid reduction={reduction}")
-
-    obj = -2 * factor * torch.sum(
-        torch.exp(
-            -1.0
-            / 2.0
-            * (
-                (scaled_Tsample @ scaled_Tsample.T).diag().unsqueeze(1)
-                - 2 * scaled_Tsample @ scaled_adaptedSsample.T
-                + (scaled_adaptedSsample @ scaled_adaptedSsample.T).diag().unsqueeze(0)
-            )
-        )
-    ) + factor * torch.sum(
-        torch.exp(
-            -1.0
-            / 2.0
-            * (
-                (scaled_adaptedSsample @ scaled_adaptedSsample.T).diag().unsqueeze(1)
-                - 2 * scaled_adaptedSsample @ scaled_adaptedSsample.T
-                + (scaled_adaptedSsample @ scaled_adaptedSsample.T).diag().unsqueeze(0)
-            )
-        )
-    )
-    return obj
-
-
-class MMDLinearAdapterModule(torch.nn.Module):
-    def __init__(
-        self,
-        transform_type: str,
-        num_feats: int,
-        device=None,
-        dtype=None,
-    ) -> None:
-        factory_kwargs = {"device": device, "dtype": dtype}
-        super().__init__()
-        self.transform_type = transform_type
-        self.num_feats = num_feats
-
-        if transform_type == "location-scale":
-            self.M = torch.nn.Parameter(torch.empty(num_feats, **factory_kwargs))
-            self.b = torch.nn.Parameter(torch.empty(num_feats, **factory_kwargs))
-
-        elif transform_type == "affine":
-            self.M = torch.nn.Parameter(
-                torch.empty((num_feats, num_feats), **factory_kwargs)
-            )
-            self.b = torch.nn.Parameter(torch.empty(num_feats, **factory_kwargs))
-        else:
-            raise ValueError(f"invalid transform_type:{transform_type}")
-        self.reset_parameters()
-
-    def reset_parameters(self) -> None:
-        if self.transform_type == "location-scale":
-            torch.nn.init.ones_(self.M)
-            torch.nn.init.zeros_(self.b)
-        elif self.transform_type == "affine":
-            torch.nn.init.eye_(self.M)
-            torch.nn.init.zeros_(self.b)
-
-    def forward(self, S: torch.Tensor) -> torch.Tensor:
-        if self.transform_type == "location-scale":
-            adaptedSsample = S * self.M.reshape(1, -1) + self.b.reshape(1, -1)
-        elif self.transform_type == "affine":
-            adaptedSsample = S @ M.T + b.reshape(1, -1)
-        return adaptedSsample
-
-    def extra_repr(self) -> str:
-        return "transform_type={}, num_feats={}".format(
-            self.transform_type,
-            self.num_feats,
-        )
 
 
 def run_mmd(
@@ -133,6 +48,7 @@ def run_mmd(
     weight_decay: float = 1e-3,
     patience: int = 5,
     length_scale_method: str = "target",
+    multiscale: bool = False,
 ):
     """
     Args:
@@ -151,6 +67,7 @@ def run_mmd(
     Returns:
         M: (num_feats, num_feats)
         b: (num_feats,)
+        debug_dict: dict with keys "train_loss, "val_loss"
     """
     S = S.astype(np.float32)
     T = T.astype(np.float32)
@@ -176,28 +93,31 @@ def run_mmd(
     else:
         raise ValueError(f"Invalid length_scale_method: {length_scale_method}")
 
+    debug_dict = {"train_loss": [], "val_loss": []}
     for epoch in range(epochs):
         n_samples = len(train_loader.dataset)
         n_batches = len(train_loader)
         model.train()
+        train_loss = 0.0
         for batch_ix, (Ssample, Tsample) in enumerate(train_loader):
             adaptedSsample = model(Ssample)
-            loss = MMDLoss(adaptedSsample, Tsample, length_scale, reduction="product")
+            loss = MMDLoss(adaptedSsample, Tsample, length_scale, multiscale=multiscale)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
+            train_loss += loss.item()
             if verbose >= 2 and batch_ix % (max(n_batches, 5) // 5) == 0:
                 # print progress ~5 times per epoch
                 loss = loss.item()
                 print(f"epoch:{epoch} loss: {loss:>7f}  [{batch_ix}/{n_batches}]")
+        debug_dict["train_loss"].append(train_loss)
 
         model.eval()
         adaptedS = model(torch.from_numpy(S))
-        val_loss = MMDLoss(
-            adaptedS, torch.from_numpy(T), length_scale, reduction="product"
-        )
-        early_stopping(val_loss, model, epoch)
+        val_loss = MMDLoss(adaptedS, torch.from_numpy(T), length_scale)
+        debug_dict["val_loss"].append(val_loss.item())
+        early_stopping(val_loss.item(), model, epoch)
         if verbose and early_stopping.early_stop:
             (best_loss, best_epoch) = early_stopping.loss_min, early_stopping.epoch_min
             print(
@@ -215,7 +135,7 @@ def run_mmd(
     best_b = model.b.detach().numpy()
     if best_M.ndim == 1:
         best_M = np.diag(best_M)
-    return (best_M, best_b)
+    return (best_M, best_b, debug_dict)
 
 
 class MMDAdapter:
@@ -253,14 +173,14 @@ class MMDAdapter:
         T: np.ndarray,
     ):
         """
-        Modifies M_, b_, M_inv_
+        Modifies M_, b_, M_inv_, self.debug_dict_
         """
         num_S = S.shape[0]
         num_T = T.shape[0]
         assert S.shape[1] == T.shape[1]
 
         num_feats = S.shape[1]
-        self.M_, self.b_ = run_mmd(
+        self.M_, self.b_, self.debug_dict_ = run_mmd(
             S=S,
             T=T,
             transform_type=self.transform_type,
