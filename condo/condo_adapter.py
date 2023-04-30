@@ -20,13 +20,111 @@ from sklearn.gaussian_process.kernels import (
     WhiteKernel,
 )
 from sklearn.linear_model import RidgeCV
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import (
+    LabelEncoder,
+    OneHotEncoder,
+)
+
+from torch.utils.data import (
+    DataLoader,
+    Dataset,
+    WeightedRandomSampler,
+)
 
 from condo.heteroscedastic_kernel import HeteroscedasticKernel
 from condo.cat_kernels import (
     CatKernel,
     HeteroscedasticCatKernel,
 )
+from condo.utils import (
+    EarlyStopping,
+    MMDLinearAdapterModule,
+    MMDLoss,
+)
+
+
+def get_kernel(X, custom_kernel):
+    num_confounders = X.shape[1]
+    if custom_kernel is not None:
+        kernel = custom_kernel()
+    else:
+        confounder_is_cat = (X.dtype == bool) or not np.issubdtype(X.dtype, np.number)
+        # TODO: handle confounders of different dtypes
+        if confounder_is_cat:
+            if num_confounders > 1:
+                raise ValueError(
+                    f"Requires custom_kernel since "
+                    f"num_confounder = {num_confounders}, with at least "
+                    f"1 categorical confounder"
+                )
+            kernel = CatKernel()
+        else:
+            Xstd = np.std(X, axis=0)
+            kernel = RBF(0.1 * Xstd) + 0.01 * RBF(1.0 * Xstd)  # + 0.01*RBF(10*Xstd)
+    return kernel
+
+
+def product_prior(X_S, X_T, custom_kernel):
+    """
+    Returns all unique values in {X_T, X_S}, with weights (summing to 1) from
+    the product of D_{X_S} and D_{X_T}.
+    """
+    # TODO: handle confounders of different dtypes
+    Xtest = np.vstack([X_T, X_S])
+    Xtestu, Xtestu_idx, Xtestu_ixs, Xtestu_counts = np.unique(
+        Xtest, axis=0, return_index=True, return_inverse=True, return_counts=True
+    )
+    X_Su, X_Su_ixs = np.unique(X_S, axis=0, return_inverse=True)
+    X_Tu, X_Tu_ixs = np.unique(X_T, axis=0, return_inverse=True)
+    num_testu = Xtestu.shape[0]
+    num_Su = X_Su.shape[0]
+    num_Tu = X_Tu.shape[0]
+
+    source_kernel = get_kernel(X_S, custom_kernel)
+    target_kernel = get_kernel(X_T, custom_kernel)
+    source_probs = source_kernel(X_Su, Xtestu)  # (num_Su, num_testu)
+    target_probs = target_kernel(X_Tu, Xtestu)  # (num_Tu, num_testu)
+    source_probs = source_probs[X_Su_ixs, :]  # (num_S, num_testu)
+    target_probs = target_probs[X_Tu_ixs, :]  # (num_T, num_testu)
+    source_probs = np.sum(source_probs, axis=0)  # (num_testu,)
+    target_probs = np.sum(target_probs, axis=0)  # (num_testu,)
+    source_probs = source_probs[Xtestu_ixs]  # (num_test,)
+    target_probs = target_probs[Xtestu_ixs]  # (num_test,)
+    source_probs = source_probs / np.sum(source_probs)
+    target_probs = target_probs / np.sum(target_probs)
+    W = np.sqrt(target_probs * source_probs)
+    W = W[Xtestu_idx] * Xtestu_counts
+    W = W / np.sum(W)
+    W = W.reshape(-1, 1)  # (num_test, 1)
+    np.testing.assert_almost_equal(np.sum(W), 1.0, decimal=4)
+    assert Xtestu.shape == W.shape
+    return (Xtestu, W)
+
+
+class ConDoMMDDataset(Dataset):
+    def __init__(
+        self,
+        S: np.ndarray,
+        T: np.ndarray,
+        Xtestu: np.ndarray,
+    ):
+        self.S = torch.from_numpy(S)
+        self.T = torch.from_numpy(T)
+        if Xtestu.dtype.type is np.string_ or Xtestu.dtype.type is np.str_:
+            assert Xtestu.shape[1] == 1
+            self.le = LabelEncoder()
+            Xtestu = self.le.fit_transform(Xtestu)
+            Xtestu = Xtestu.reshape(-1, 1)
+        self.Xtestu = torch.from_numpy(Xtestu)
+        self.unraveler = (Xtestu.shape[0], S.shape[0], T.shape[0])
+        self.n_items = Xtestu.shape[0] * S.shape[0] * T.shape[0]
+
+    def __len__(self):
+        return self.n_items
+
+    def __getitem__(self, idx):
+        (x_ix, s_ix, t_ix) = np.unravel_index(idx, self.unraveler)
+        return self.Xtestu[x_ix, :], self.S[s_ix, :], self.T[t_ix, :]
 
 
 def run_mmd(
@@ -42,186 +140,132 @@ def run_mmd(
     verbose: Union[bool, int],
     epochs: int = 100,
     batch_size: int = 16,
-    alpha: float = 1e-2,
-    beta: float = 0.9,
+    learning_rate: float = 1e-2,
+    weight_decay: float = 1e-3,
+    patience: int = 5,
+    length_scale_method: str = "target",
+    multiscale: bool = False,
 ):
     """
     Args:
-        debug: is ignored
-
         epochs: number of times to pass through all observed confounder values.
 
         batch_size: number of samples to draw from S and T per confounder value.
             kernel matrix will be of size (batch_size, batch_size).
             The number of batches per epoch is num_S*num_T / (batch_size ** 2).
 
-        alpha: gradient descent learning rate (ie step size).
+        learning_rate: AdamW learning rate (ie step size).
 
-        beta: Nesterov momentum
+        weight_decay: AdamW weight_decay
+
+        patience: early-stopping patience in epochs
 
     Returns:
         M: (num_feats, num_feats)
         b: (num_feats,)
-        debug_tuple: (m_plot, b_plot, mb_objs) or None
+        debug_dict: dict with keys "train_loss, "val_loss"
     """
-    rng = np.random.RandomState(42)
+    S = S.astype(np.float32)
+    T = T.astype(np.float32)
     num_S = S.shape[0]
     num_T = T.shape[0]
     num_test = Xtest.shape[0]
     num_feats = S.shape[1]
-    num_confounders = X_S.shape[1]
-    confounder_is_cat = (Xtest.dtype == bool) or not np.issubdtype(
-        Xtest.dtype, np.number
-    )
-    # TODO: handle confounders of different dtypes
-    if confounder_is_cat:
-        (Xtestu, Xtestu_idx, Xtestu_counts) = np.unique(
-            Xtest, axis=0, return_index=True, return_counts=True
-        )
-        orig_sum_counts = np.sum(Xtestu_counts)
-        Xtestu_counts = Xtestu_counts * Wtest[Xtestu_idx, 0]
-        Xtestu_counts = Xtestu_counts * (orig_sum_counts / np.sum(Xtestu_counts))
-        num_testu = Xtestu.shape[0]
-    else:
-        Xtestu = Xtest
-        num_testu = num_test
-        Xtestu_counts = np.ones(num_testu)
-        orig_sum_counts = np.sum(Xtestu_counts)
-        Xtestu_counts = Xtestu_counts * Wtest[:, 0]
-        Xtestu_counts = Xtestu_counts * (orig_sum_counts / np.sum(Xtestu_counts))
 
-    if custom_kernel is not None:
-        target_kernel = custom_kernel()
-        source_kernel = custom_kernel()
-    else:
-        if confounder_is_cat:
-            target_kernel = CatKernel()
-            source_kernel = CatKernel()
-        else:
-            target_kernel = 1.0 * RBF(length_scale=np.std(X_T, axis=0))
-            source_kernel = 1.0 * RBF(length_scale=np.std(X_S, axis=0))
-
-    target_similarities = target_kernel(X_T, Xtestu)  # (num_T, num_testu)
-    T_weights = target_similarities / np.sum(target_similarities, axis=0, keepdims=True)
-    source_similarities = source_kernel(X_S, Xtestu)  # (num_T, num_testu)
+    source_kernel = get_kernel(X_S, custom_kernel)
+    target_kernel = get_kernel(X_T, custom_kernel)
+    source_similarities = source_kernel(X_S, Xtest).astype(
+        np.float32
+    )  # (num_S, num_test)
+    target_similarities = target_kernel(X_T, Xtest).astype(
+        np.float32
+    )  # (num_T, num_test)
     S_weights = source_similarities / np.sum(source_similarities, axis=0, keepdims=True)
-    T_torch = torch.from_numpy(T)
-    S_torch = torch.from_numpy(S)
+    T_weights = target_similarities / np.sum(target_similarities, axis=0, keepdims=True)
+    ust_weights = np.zeros((num_test, num_S, num_T))
+    for cix in range(num_test):
+        ust_weights[cix, :, :] = np.outer(S_weights[:, cix], T_weights[:, cix])
+        ust_weights[cix, :, :] *= Wtest[cix] / np.sum(ust_weights[cix, :, :])
+    ust_weights = np.ravel(ust_weights)
 
-    if transform_type == "location-scale":
-        M = torch.ones(num_feats, dtype=torch.float64, requires_grad=True)
-        b = torch.zeros(num_feats, dtype=torch.float64, requires_grad=True)
-    elif transform_type == "affine":
-        M = torch.eye(num_feats, num_feats, dtype=torch.float64, requires_grad=True)
-        b = torch.zeros(num_feats, dtype=torch.float64, requires_grad=True)
-    batches = round(num_S * num_T / (batch_size * batch_size))
-    full_epochs = math.floor(epochs)
-    frac_epochs = epochs % 1
-    terms_per_batch = num_testu * batch_size * batch_size
-    obj_history = []
-    best_M = np.eye(num_feats, num_feats)
-    best_b = np.zeros(num_feats)
-    for epoch in range(full_epochs + 1):
-        epoch_start_M = M.detach().numpy()
-        epoch_start_b = b.detach().numpy()
-        Mz = torch.zeros_like(M)
-        bz = torch.zeros_like(b)
-        objs = np.zeros(batches)
-        if epoch == full_epochs:
-            cur_batches = round(frac_epochs * batches)
-        else:
-            cur_batches = batches
-        for batch in range(cur_batches):
-            tgtsample_ixs = [
-                rng.choice(
-                    num_T, size=batch_size, replace=True, p=T_weights[:, cix]
-                ).tolist()
-                for cix in range(num_testu)
-            ]
-            srcsample_ixs = [
-                rng.choice(
-                    num_S, size=batch_size, replace=True, p=S_weights[:, cix]
-                ).tolist()
-                for cix in range(num_testu)
-            ]
-            obj = torch.tensor(0.0, requires_grad=True)
-            for cix in range(num_testu):
-                Tsample = T_torch[tgtsample_ixs[cix], :]
-                if transform_type == "location-scale":
-                    adaptedSsample = S_torch[srcsample_ixs[cix], :] * M.reshape(
-                        1, -1
-                    ) + b.reshape(1, -1)
-                elif transform_type == "affine":
-                    adaptedSsample = S_torch[srcsample_ixs[cix], :] @ M.T + b.reshape(
-                        1, -1
-                    )
-                length_scale_np = (
-                    torch.mean((Tsample - adaptedSsample) ** 2, axis=0).detach().numpy()
-                )
-                invroot_length_scale = 1.0 / np.sqrt(length_scale_np)
-                lscaler = torch.from_numpy(invroot_length_scale).view(1, -1)
-                Tsample = Tsample * lscaler
-                adaptedSsample = adaptedSsample * lscaler
+    train_dataset = ConDoMMDDataset(S, T, Xtest)
+    train_sampler = WeightedRandomSampler(
+        ust_weights,
+        num_samples=S.shape[0] * T.shape[0],
+        replacement=True,
+    )
+    train_loader = DataLoader(
+        train_dataset, batch_size=batch_size, sampler=train_sampler
+    )
 
-                factor = Xtestu_counts[cix] / terms_per_batch
-                obj = obj - 2 * factor * torch.sum(
-                    torch.exp(
-                        -1.0
-                        / 2.0
-                        * (
-                            (Tsample @ Tsample.T).diag().unsqueeze(1)
-                            - 2 * Tsample @ adaptedSsample.T
-                            + (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(0)
-                        )
-                    )
-                )
-                obj = obj + factor * torch.sum(
-                    torch.exp(
-                        -1.0
-                        / 2.0
-                        * (
-                            (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(1)
-                            - 2 * adaptedSsample @ adaptedSsample.T
-                            + (adaptedSsample @ adaptedSsample.T).diag().unsqueeze(0)
-                        )
-                    )
-                )
+    model = MMDLinearAdapterModule(transform_type=transform_type, num_feats=num_feats)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=learning_rate, weight_decay=weight_decay, eps=1e-5
+    )
+    early_stopping = EarlyStopping(patience=patience, model=model)
 
-            obj.backward()
-            with torch.no_grad():
-                Mz = beta * Mz + M.grad
-                bz = beta * bz + b.grad
-                M -= alpha * Mz
-                b -= alpha * bz
-            M.grad.zero_()
-            b.grad.zero_()
-            if verbose >= 2:
+    if length_scale_method == "target":
+        length_scale = np.var(T, axis=0)
+    elif length_scale_method == "source":
+        length_scale = np.var(S, axis=0)
+    elif length_scale_method in ("initialMSE", "dynamic"):
+        n_samples = max(T.shape[0], S.shape[0])
+        rng = np.random.RandomState(42)
+        T_ls_ixs = rng.choice(T.shape[0], size=n_samples, replace=True)
+        S_ls_ixs = rng.choice(S.shape[0], size=n_samples, replace=True)
+        length_scale = np.mean((T[T_ls_ixs, :] - S[S_ls_ixs, :]) ** 2, axis=0)
+    else:
+        raise ValueError(f"Invalid length_scale_method: {length_scale_method}")
+
+    debug_dict = {"train_loss": [], "val_loss": []}
+    for epoch in range(epochs):
+        n_samples = len(train_loader.dataset)
+        n_batches = len(train_loader)
+        model.train()
+        train_loss = 0.0
+        for batch_ix, (_, Ssample, Tsample) in enumerate(train_loader):
+            adaptedSsample = model(Ssample)
+            loss = MMDLoss(adaptedSsample, Tsample, length_scale, multiscale=multiscale)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item()
+            if verbose >= 2 and batch_ix % (max(n_batches, 5) // 5) == 0:
+                # print progress ~5 times per epoch
+                loss = loss.item()
                 print(
-                    f"epoch:{epoch}/{epochs} batch:{batch}/{cur_batches} obj:{obj:.5f}"
+                    f"    ConDoMMD epoch:{epoch} loss:{train_loss:>5f}  [{batch_ix}/{n_batches}]"
                 )
-            objs[batch] = obj.detach().numpy()
+        debug_dict["train_loss"].append(train_loss)
 
-        last_obj = np.mean(objs)
-        if verbose >= 1:
-            print(f"epoch:{epoch} {objs[0]:.5f}->{objs[-1]:.5f} avg:{last_obj:.5f}")
-        if epoch > 0 and last_obj < np.min(np.array(obj_history)):
-            best_M = epoch_start_M
-            best_b = epoch_start_b
-        if epoch == full_epochs and full_epochs == 0:
-            best_M = M.detach().numpy()
-            best_b = b.detach().numpy()
-        if len(obj_history) >= 10:
-            if last_obj > np.max(np.array(obj_history[-10:])):
-                # Terminate early if worse than all previous 10 iterations
-                if verbose >= 1:
-                    print(
-                        f"Terminating {(alpha, beta)} after epoch {epoch}: {last_obj:.5f}"
-                    )
-                break
-        obj_history.append(last_obj)
-    if best_M.ndim == 1:
-        best_M = np.diag(best_M)
-    return (best_M, best_b, None)
+        model.eval()
+        adaptedS = model(torch.from_numpy(S))
+        val_loss = 0.0
+        for batch_ix, (_, Ssample, Tsample) in enumerate(train_loader):
+            adaptedSsample = model(Ssample)
+            loss = MMDLoss(adaptedSsample, Tsample, length_scale, multiscale=multiscale)
+            val_loss += loss.item()
+        debug_dict["val_loss"].append(val_loss)
+        early_stopping(val_loss, model, epoch)
+        if verbose:
+            print(f"ConDoMMD {val_loss:.2f}@{epoch}")
+        if verbose and early_stopping.early_stop:
+            (best_loss, best_epoch) = early_stopping.loss_min, early_stopping.epoch_min
+            print(
+                f"ConDoMMD early stopping: "
+                f"{val_loss:.2f}@{epoch} vs {best_loss:.2f}@{best_epoch}"
+            )
+            break
+        if length_scale_method == "dynamic":
+            adaptedSnp = adaptedS.detach().numpy()
+            length_scale = np.mean(
+                (T[T_ls_ixs, :] - adaptedSnp[S_ls_ixs, :]) ** 2, axis=0
+            )
+
+    model.load_state_dict(early_stopping.state_dict)
+    (best_M, best_b) = model.get_M_b()
+    return (best_M, best_b, debug_dict)
 
 
 def joint_linear_distr(
@@ -1310,48 +1354,7 @@ class ConDoAdapter:
             W = np.vstack([np.ones((num_T, 1)) / num_T, np.ones((num_S, 1)) / num_S])
             W = W / np.sum(W)
         elif self.sampling == "product":
-            Xtest = np.vstack([X_T, X_S])
-            Xtestu, Xtestu_ixs = np.unique(Xtest, axis=0, return_inverse=True)
-            num_testu = Xtestu.shape[0]
-            X_Tu, X_Tu_ixs = np.unique(X_T, axis=0, return_inverse=True)
-            X_Su, X_Su_ixs = np.unique(X_S, axis=0, return_inverse=True)
-            num_Tu = X_Tu.shape[0]
-            num_Su = X_Su.shape[0]
-            if self.custom_kernel is not None:
-                target_kernel = self.custom_kernel()
-                source_kernel = self.custom_kernel()
-            else:
-                confounder_is_cat = (Xtest.dtype == bool) or not np.issubdtype(
-                    Xtest.dtype, np.number
-                )
-                # TODO: handle confounders of different dtypes
-                if confounder_is_cat:
-                    if num_confounders > 1:
-                        raise ValueError(
-                            f"product-sampling requires custom_kernel since "
-                            f"num_confounder = {num_confounders}, with at least "
-                            f"1 categorical confounder"
-                        )
-                    target_kernel = CatKernel()
-                    source_kernel = CatKernel()
-                else:
-                    target_kernel = 1.0 * RBF(length_scale=np.std(X_T, axis=0))
-                    source_kernel = 1.0 * RBF(length_scale=np.std(X_S, axis=0))
-
-            target_probs = target_kernel(X_Tu, Xtestu)  # (num_Tu, num_testu)
-            source_probs = source_kernel(X_Su, Xtestu)  # (num_Su, num_testu)
-            target_probs = target_probs[X_Tu_ixs, :]  # (num_T, num_testu)
-            source_probs = source_probs[X_Su_ixs, :]  # (num_S, num_testu)
-            target_probs = np.sum(target_probs, axis=0)  # (num_testu,)
-            source_probs = np.sum(source_probs, axis=0)  # (num_testu,)
-            target_probs = target_probs[Xtestu_ixs]  # (num_test,)
-            source_probs = source_probs[Xtestu_ixs]  # (num_test,)
-            target_probs = target_probs / np.sum(target_probs)
-            source_probs = source_probs / np.sum(source_probs)
-            W = np.sqrt(target_probs * source_probs)
-            W = W / np.sum(W)
-            W = W.reshape(-1, 1)  # (num_test, 1)
-
+            Xtest, W = product_prior(X_S, X_T, self.custom_kernel)
         else:
             raise ValueError(f"sampling: {self.sampling}")
         num_test = Xtest.shape[0]
@@ -1433,15 +1436,16 @@ class ConDoAdapter:
         self,
         S,
     ):
-
+        S = S.astype(np.float32)
+        adaptedS = S @ self.M_.T + self.b_.reshape(1, -1)
         # same as adaptedS = (self.M_ @ S.T).T + self.b_.reshape(1, -1)
         # self.b_.reshape(1, -1) has shape (1, num_feats)
-        adaptedS = S @ self.M_.T + self.b_.reshape(1, -1)
         return adaptedS
 
     def inverse_transform(
         self,
         T,
     ):
+        T = T.astype(np.float32)
         adaptedT = (T - self.b_.reshape(1, -1)) @ self.M_inv_.T
         return adaptedT

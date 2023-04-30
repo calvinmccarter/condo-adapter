@@ -54,17 +54,17 @@ class MMDLinearAdapterModule(torch.nn.Module):
 
     def reset_parameters(self) -> None:
         if self.transform_type == "location-scale":
-            torch.nn.init.ones_(self.M)
+            torch.nn.init.zeros_(self.M)
             torch.nn.init.zeros_(self.b)
         elif self.transform_type == "affine":
-            torch.nn.init.eye_(self.M)
+            torch.nn.init.zeros_(self.M)
             torch.nn.init.zeros_(self.b)
 
     def forward(self, S: torch.Tensor) -> torch.Tensor:
         if self.transform_type == "location-scale":
-            adaptedSsample = S * self.M.reshape(1, -1) + self.b.reshape(1, -1)
+            adaptedSsample = S * self.M.reshape(1, -1) + self.b.reshape(1, -1) + S
         elif self.transform_type == "affine":
-            adaptedSsample = S @ M.T + b.reshape(1, -1)
+            adaptedSsample = S @ self.M.T + self.b.reshape(1, -1) + S
         return adaptedSsample
 
     def extra_repr(self) -> str:
@@ -72,6 +72,14 @@ class MMDLinearAdapterModule(torch.nn.Module):
             self.transform_type,
             self.num_feats,
         )
+
+    def get_M_b(self):
+        best_M = self.M.detach().numpy().astype(np.float32)
+        best_b = self.b.detach().numpy().astype(np.float32)
+        if best_M.ndim == 1:
+            best_M = np.diag(best_M)
+        best_M += np.eye(self.num_feats, self.num_feats, dtype=np.float32)
+        return (best_M, best_b)
 
 
 def MMDLoss(

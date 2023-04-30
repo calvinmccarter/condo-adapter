@@ -115,7 +115,9 @@ def run_mmd(
 
         model.eval()
         adaptedS = model(torch.from_numpy(S))
-        val_loss = MMDLoss(adaptedS, torch.from_numpy(T), length_scale)
+        val_loss = MMDLoss(
+            adaptedS, torch.from_numpy(T), length_scale, multiscale=multiscale
+        )
         debug_dict["val_loss"].append(val_loss.item())
         early_stopping(val_loss.item(), model, epoch)
         if verbose and early_stopping.early_stop:
@@ -131,10 +133,7 @@ def run_mmd(
             )
 
     model.load_state_dict(early_stopping.state_dict)
-    best_M = model.M.detach().numpy()
-    best_b = model.b.detach().numpy()
-    if best_M.ndim == 1:
-        best_M = np.diag(best_M)
+    (best_M, best_b) = model.get_M_b()
     return (best_M, best_b, debug_dict)
 
 

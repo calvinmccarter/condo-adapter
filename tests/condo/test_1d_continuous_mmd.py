@@ -45,13 +45,14 @@ def test_1d_continuous_condo_mmd(sampling, transform_type):
     T = rng.normal(mu_T, sigma_T)
     Strue = rng.normal(mu_S, sigma_S)
     Sbatch = batch_m * Strue + batch_b
+    print(f"true_m:{true_m:.3f} true_b:{true_b:.3f}")
 
     cder = ConDoAdapter(
         sampling=sampling,
         transform_type=transform_type,
         model_type="empirical",
         divergence="mmd",
-        optim_kwargs={"epochs": 10, "alpha": 0.1, "beta": 0.99},
+        optim_kwargs={"epochs": 10, "learning_rate": 1e-2},
     )
 
     cder.fit(Sbatch, T, X_S, X_T)
@@ -103,7 +104,7 @@ def test_1d_continuous_mmd(transform_type):
 
     cder = MMDAdapter(
         transform_type=transform_type,
-        optim_kwargs={"epochs": 10, "alpha": 0.1, "beta": 0.99},
+        optim_kwargs={"epochs": 10, "learning_rate": 1e-4},
     )
 
     cder.fit(Sbatch, T)
