@@ -8,6 +8,7 @@ import torch
 import torchmin as tm
 import sklearn.utils as skut
 
+from scipy.stats import scoreatpercentile
 from sklearn.cluster import KMeans
 from sklearn.compose import make_column_transformer
 from sklearn.compose import make_column_selector
@@ -27,7 +28,6 @@ from sklearn.preprocessing import (
 
 from torch.utils.data import (
     DataLoader,
-    Dataset,
     WeightedRandomSampler,
 )
 
@@ -38,6 +38,7 @@ from condo.cat_kernels import (
 )
 from condo.utils import (
     EarlyStopping,
+    MMDDataset,
     MMDLinearAdapterModule,
     MMDLoss,
 )
@@ -59,8 +60,18 @@ def get_kernel(X, custom_kernel):
                 )
             kernel = CatKernel()
         else:
-            Xstd = np.std(X, axis=0)
-            kernel = RBF(0.1 * Xstd) + 0.01 * RBF(1.0 * Xstd)  # + 0.01*RBF(10*Xstd)
+            (n, d) = X.shape
+            stddev = np.std(X, axis=0)
+            iqr = (scoreatpercentile(X, 75) - scoreatpercentile(X, 25)) / 1.349
+            silverman = (0.9 * (n * (d + 2) / 4.0) ** (-1.0 / (d + 4))) * np.minimum(
+                stddev, iqr
+            ) + 1e-8
+            # kernel = RBF(0.1 * stddev) + 0.01 * RBF(1.0 * stddev)  # + 0.01*RBF(10*Xstd)
+            kernel = (
+                RBF(silverman)
+                + 0.5 * RBF(0.5 * silverman)
+                + 0.25 * RBF(0.25 * silverman)
+            )
     return kernel
 
 
@@ -101,32 +112,6 @@ def product_prior(X_S, X_T, custom_kernel):
     return (Xtestu, W)
 
 
-class ConDoMMDDataset(Dataset):
-    def __init__(
-        self,
-        S: np.ndarray,
-        T: np.ndarray,
-        Xtestu: np.ndarray,
-    ):
-        self.S = torch.from_numpy(S)
-        self.T = torch.from_numpy(T)
-        if Xtestu.dtype.type is np.string_ or Xtestu.dtype.type is np.str_:
-            assert Xtestu.shape[1] == 1
-            self.le = LabelEncoder()
-            Xtestu = self.le.fit_transform(Xtestu)
-            Xtestu = Xtestu.reshape(-1, 1)
-        self.Xtestu = torch.from_numpy(Xtestu)
-        self.unraveler = (Xtestu.shape[0], S.shape[0], T.shape[0])
-        self.n_items = Xtestu.shape[0] * S.shape[0] * T.shape[0]
-
-    def __len__(self):
-        return self.n_items
-
-    def __getitem__(self, idx):
-        (x_ix, s_ix, t_ix) = np.unravel_index(idx, self.unraveler)
-        return self.Xtestu[x_ix, :], self.S[s_ix, :], self.T[t_ix, :]
-
-
 def run_mmd(
     S: np.ndarray,
     T: np.ndarray,
@@ -160,6 +145,8 @@ def run_mmd(
 
         patience: early-stopping patience in epochs
 
+        multiscale: whether MMDLoss should be assessed at multiple scales.
+
     Returns:
         M: (num_feats, num_feats)
         b: (num_feats,)
@@ -182,17 +169,18 @@ def run_mmd(
     )  # (num_T, num_test)
     S_weights = source_similarities / np.sum(source_similarities, axis=0, keepdims=True)
     T_weights = target_similarities / np.sum(target_similarities, axis=0, keepdims=True)
-    ust_weights = np.zeros((num_test, num_S, num_T))
+    st_weights = np.zeros((num_S, num_T))
     for cix in range(num_test):
-        ust_weights[cix, :, :] = np.outer(S_weights[:, cix], T_weights[:, cix])
-        ust_weights[cix, :, :] *= Wtest[cix] / np.sum(ust_weights[cix, :, :])
-    ust_weights = np.ravel(ust_weights)
+        cur_st_weights = np.outer(S_weights[:, cix], T_weights[:, cix])
+        cur_st_weights *= Wtest[cix] / np.sum(cur_st_weights)
+        st_weights += cur_st_weights
+    st_weights = np.ravel(st_weights)
 
-    train_dataset = ConDoMMDDataset(S, T, Xtest)
+    train_dataset = MMDDataset(S, T)
     train_sampler = WeightedRandomSampler(
-        ust_weights,
-        num_samples=S.shape[0] * T.shape[0],
-        replacement=True,
+        st_weights,
+        num_samples=len(train_dataset),
+        replacement=False,
     )
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, sampler=train_sampler
@@ -223,7 +211,7 @@ def run_mmd(
         n_batches = len(train_loader)
         model.train()
         train_loss = 0.0
-        for batch_ix, (_, Ssample, Tsample) in enumerate(train_loader):
+        for batch_ix, (Ssample, Tsample) in enumerate(train_loader):
             adaptedSsample = model(Ssample)
             loss = MMDLoss(adaptedSsample, Tsample, length_scale, multiscale=multiscale)
             optimizer.zero_grad()
@@ -242,7 +230,7 @@ def run_mmd(
         model.eval()
         adaptedS = model(torch.from_numpy(S))
         val_loss = 0.0
-        for batch_ix, (_, Ssample, Tsample) in enumerate(train_loader):
+        for batch_ix, (Ssample, Tsample) in enumerate(train_loader):
             adaptedSsample = model(Ssample)
             loss = MMDLoss(adaptedSsample, Tsample, length_scale, multiscale=multiscale)
             val_loss += loss.item()
