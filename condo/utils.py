@@ -3,8 +3,6 @@ from copy import deepcopy
 import numpy as np
 import torch
 
-from torch.utils.data import Dataset
-
 
 class EarlyStopping:
     def __init__(self, patience, model=None):
@@ -26,24 +24,6 @@ class EarlyStopping:
             self.counter += 1
             if self.counter >= self.patience:
                 self.early_stop = True
-
-
-class MMDDataset(Dataset):
-    def __init__(self, S: np.ndarray, T: np.ndarray):
-        self.S = torch.from_numpy(S)
-        self.T = torch.from_numpy(T)
-        all_idxs = np.arange(self.S.shape[0] * self.T.shape[0])
-        self.idx_S = all_idxs % S.shape[0]
-        self.idx_T = all_idxs // S.shape[0]
-
-    def __len__(self):
-        return self.S.shape[0] * self.T.shape[0]
-
-    def __getitem__(self, idx):
-        (srcsample_ix, tgtsample_ix) = np.unravel_index(
-            idx, (self.S.shape[0], self.T.shape[0])
-        )
-        return self.S[srcsample_ix, :], self.T[tgtsample_ix, :]
 
 
 class MMDLinearAdapterModule(torch.nn.Module):
