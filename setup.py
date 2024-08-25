@@ -7,7 +7,7 @@ def readme():
         return readme_file.read()
 
 configuration = {
-    "name": "utrees",
+    "name": "condo",
     "version": "0.8.0",
     "description": "Confounded domain adaptation",
     "long_description": readme(),
@@ -37,7 +37,9 @@ configuration = {
     "maintainer_email": "mccarter.calvin@gmail.com",
     "packages": ["condo"],
     "install_requires": [
+        "miceforest<6.0.0",
         "numpy",
+        "pandas",
         "pytorch-minimize>=0.0.2",
         "scipy",
         "scikit-learn",

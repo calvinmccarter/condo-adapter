@@ -1,4 +1,4 @@
-miceforest
+miceforest==5.7.0
 numpy>=1.18.1
 pandas>=1.0
 pre-commit>=2.2.0
