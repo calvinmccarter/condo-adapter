@@ -1,6 +1,6 @@
+miceforest
 numpy>=1.18.1
 pandas>=1.0
-pot>=0.7.0
 pre-commit>=2.2.0
 pytest>=5.4.1
 pytorch-minimize>=0.0.2

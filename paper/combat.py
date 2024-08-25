@@ -105,7 +105,7 @@ def combat(data, batch, model=None, numerical_covariates=None):
 
     # drop intercept
     drop_cols = [
-        cname for cname, inter in ((model == 1).all()).iteritems() if inter == True
+        cname for cname, inter in ((model == 1).all()).items() if inter == True
     ]
     drop_idxs = [list(model.columns).index(cdrop) for cdrop in drop_cols]
     model = model[[c for c in model.columns if not c in drop_cols]]

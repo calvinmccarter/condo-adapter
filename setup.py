@@ -2,45 +2,55 @@
 import os
 from setuptools import setup, find_packages
 
-try:
-    with open("README.md", "r", encoding="utf-8") as f:
-        long_description = f.read()
-except IOError:
-    long_description = ""
+def readme():
+    with open("README.md", encoding="utf-8") as readme_file:
+        return readme_file.read()
 
-# Extract version. Cannot import directly because of import error.
-root_dir = os.path.dirname(__file__)
-with open(os.path.join(root_dir, "condo/__init__.py"), "r") as f:
-    for line in f.readlines():
-        if line.startswith("__version__"):
-            version = line.split("=")[-1].strip().strip('"')
-            break
-
-PACKAGES = find_packages(exclude=("tests.*", "tests"))
-install_reqs = [
-    "numpy",
-    "pandas",
-    "POT",
-    "pytorch-minimize>=0.0.2",
-    "scipy",
-    "scikit-learn",
-    "torch>=1.4.0",
-]
-setup(
-    name="condo",
-    version=version,
-    description="Library to perform confounded domain adaptation.",
-    license="by-nc-sa-4.0",
-    author="Calvin McCarter",
-    author_email="mccarter.calvin@gmail.com",
-    packages=PACKAGES,
-    install_requires=install_reqs,
-    long_description=long_description,
-    long_description_content_type="text/markdown",
-    url="https://github.com/calvinmccarter/condo-adapter",
-    classifiers=[
-        "Programming Language :: Python :: 3",
-        "Operating System :: OS Independent",
+configuration = {
+    "name": "utrees",
+    "version": "0.8.0",
+    "description": "Confounded domain adaptation",
+    "long_description": readme(),
+    "long_description_content_type": "text/markdown",
+    "classifiers": [
+        "Development Status :: 3 - Alpha",
+        "Intended Audience :: Science/Research",
+        "Intended Audience :: Developers",
+        "License :: OSI Approved",
+        "Programming Language :: Python",
+        "Topic :: Software Development",
+        "Topic :: Scientific/Engineering",
+        "Operating System :: Microsoft :: Windows",
+        "Operating System :: POSIX",
+        "Operating System :: Unix",
+        "Operating System :: MacOS",
+        "Programming Language :: Python :: 3.6",
+        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
     ],
-    python_requires=">=3.8",
-)
+    "keywords": "confounding, domain adaptation, batch correction",
+    "url": "http://github.com/calvinmccarter/condo-adapter",
+    "author": "Calvin McCarter",
+    "author_email": "mccarter.calvin@gmail.com",
+    "maintainer": "Calvin McCarter",
+    "maintainer_email": "mccarter.calvin@gmail.com",
+    "packages": ["condo"],
+    "install_requires": [
+        "numpy",
+        "pytorch-minimize>=0.0.2",
+        "scipy",
+        "scikit-learn",
+        "torch>=1.4.0",
+    ],
+    "license": "by-nc-sa-4.0",
+    "ext_modules": [],
+    "cmdclass": {},
+    "test_suite": "nose.collector",
+    "tests_require": ["nose"],
+    "data_files": (),
+    "zip_safe": True,
+    "python_requires" : ">=3.8",
+}
+
+setup(**configuration)
