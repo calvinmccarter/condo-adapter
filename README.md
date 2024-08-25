@@ -56,13 +56,14 @@ pip install -e .
 
 Import ConDo and create the adapter:
 ```python
-import condo
-condoer = condo.ConDoAdapter()
+from condo import ConDoAdapterKLD
+condoer = ConDoAdapterKLD()
 ```
 
 Try using it:
 ```python
 import numpy as np
+
 X_T = np.sort(np.random.uniform(0, 8, size=(100, 1)))
 X_S = np.sort(np.random.uniform(4, 8, size=(100, 1)))
 Y_T = np.random.normal(4 * X_T + 1, 1 * X_T + 1)
@@ -83,13 +84,6 @@ In this directory run
 ```console
 pytest
 ```
-
-### Code formatting
-The Uncompromising Code Formatter: [Black](https://github.com/psf/black)  
-```black {source_file_or_directory}```  
-
-Install it into pre-commit hook to always commit well-formatted code:  
-```pre-commit install```
 
 ## License Information
 
