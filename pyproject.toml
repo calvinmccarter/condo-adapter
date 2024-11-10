@@ -1,3 +1,51 @@
 [build-system]
-requires = ["setuptools>=42"]
+requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "condo"
+version = "1.0.0"
+description = "Confounded domain adaptation"
+readme = "README.md"
+authors = [
+    { name = "Calvin McCarter", email = "mccarter.calvin@gmail.com" },
+]
+maintainers = [
+    { name = "Calvin McCarter", email = "mccarter.calvin@gmail.com" },
+]
+keywords = [
+    "domain adaptation",
+    "tabular",
+    "confounding",
+	"batch correction",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX",
+    "Operating System :: Unix",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development",
+]
+dependencies = [
+	"miceforest<6.0.0",
+	"numpy",
+	"pandas",
+	"pytorch-minimize>=0.0.2",
+	"scipy",
+	"scikit-learn",
+	"torch>=1.4.0",
+    "tqdm",
+]
+
+[project.urls]
+Homepage = "http://github.com/calvinmccarter/condo-adapter"

@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
-import os
-from setuptools import setup, find_packages
+from setuptools import setup
 
 def readme():
     with open("README.md", encoding="utf-8") as readme_file:
@@ -8,7 +6,7 @@ def readme():
 
 configuration = {
     "name": "condo",
-    "version": "0.8.0",
+    "version": "1.0.0",
     "description": "Confounded domain adaptation",
     "long_description": readme(),
     "long_description_content_type": "text/markdown",
@@ -45,14 +43,12 @@ configuration = {
         "scikit-learn",
         "torch>=1.4.0",
     ],
-    "license": "by-nc-sa-4.0",
     "ext_modules": [],
     "cmdclass": {},
     "test_suite": "nose.collector",
     "tests_require": ["nose"],
     "data_files": (),
     "zip_safe": True,
-    "python_requires" : ">=3.8",
 }
 
 setup(**configuration)
