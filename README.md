@@ -1,7 +1,7 @@
 # condo-adapter
 
 [![PyPI version](https://badge.fury.io/py/condo.svg)](https://badge.fury.io/py/condo.svg)
-[![Downloads](https://pepy.tech/badge/condo)](https://pepy.tech/project/condo)
+[![Downloads](https://static.pepy.tech/badge/condo/month)](https://static.pepy.tech/badge/condo/month)
 [![CC BY-NC-SA 4.0][cc-by-nc-sa-shield]][cc-by-nc-sa]
 
 ConDo Adapter performs Confounded Domain Adaptation, which corrects for
@@ -75,7 +75,7 @@ print(f"before ConDo: {np.mean((Y_S - Y_Strue) ** 2):.3f}")
 print(f"after ConDo:  {np.mean((Y_S2T - Y_Strue) ** 2):.3f}")
 ```
 
-More thorough examples are provided in the examples directory.
+More thorough examples are provided in the `examples` directory, and all code for experiments are in the `papers` directory.
 
 ## Development
 
