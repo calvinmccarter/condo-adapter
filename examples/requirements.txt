@@ -1,0 +1,4 @@
+matplotlib
+jupyterlab
+seaborn
+pandas>=1.0
