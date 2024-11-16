@@ -8,24 +8,6 @@ ConDo Adapter performs Confounded Domain Adaptation, which corrects for
 batch effects while conditioning on confounding variables.
 We hope it sparks joy as you clean up your data!
 
-### Using and citing this toolbox
-
-If you use this toolbox in your research and find it useful, please cite ConDo
-using the following reference to our [arXiv preprint](https://arxiv.org/abs/2203.12720):
-
-In Bibtex format:
-
-```bibtex
-@misc{https://doi.org/10.48550/arxiv.2203.12720,
-  doi = {10.48550/ARXIV.2203.12720},
-  url = {https://arxiv.org/abs/2203.12720},
-  author = {McCarter, Calvin},
-  title = {Towards Backwards-Compatible Data with Confounded Domain Adaptation},
-  publisher = {arXiv},
-  year = {2022},
-}
-```
-
 ## Installation
 
 ### Installation from pip
@@ -84,8 +66,27 @@ In this directory run
 ```console
 pytest
 ```
+### Citing this toolbox
 
-## License Information
+If you use this toolbox in your research and find it useful, please cite ConDo
+using the following reference to the [TMLR paper](https://openreview.net/pdf?id=GSp2WC7q0r):
+
+In Bibtex format:
+
+```bibtex
+@article{
+mccarter2024towards,
+title={Towards Backwards-Compatible Data with Confounded Domain Adaptation},
+author={Calvin McCarter},
+journal={Transactions on Machine Learning Research},
+issn={2835-8856},
+year={2024},
+url={https://openreview.net/forum?id=GSp2WC7q0r},
+note={}
+}
+```
+
+### License Information
 
 This work is licensed under a
 [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License][cc-by-nc-sa].
