@@ -1,0 +1,4 @@
+work/
+*.h5ad
+*.pyc
+__pycache__/
