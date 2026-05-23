@@ -261,7 +261,12 @@ class RBF(torch.nn.Module):
     def __init__(self, n_kernels=1, mul_factor=2.0, bandwidth=None):
         super().__init__()
         # XXX n_kernels > 1 causes a segfault at torch.exp with torch==2.1.2 and numpy==1.26.3
-        self.bandwidth_multipliers = mul_factor ** (torch.arange(n_kernels) - n_kernels // 2)
+        # Register as a buffer so .to(device) on the loss/parent module
+        # propagates it; otherwise CPU/CUDA mixing in forward() raises.
+        self.register_buffer(
+            'bandwidth_multipliers',
+            mul_factor ** (torch.arange(n_kernels) - n_kernels // 2),
+        )
         self.bandwidth = bandwidth
 
     def get_bandwidth(self, L2_distances):
@@ -273,7 +278,9 @@ class RBF(torch.nn.Module):
 
     def forward(self, X):
         L2_distances = torch.cdist(X, X) ** 2
-        bws = (self.get_bandwidth(L2_distances.detach()) * self.bandwidth_multipliers)[:, None, None]
+        # Track the input's device in case the loss wasn't explicitly .to()'d.
+        bw_mul = self.bandwidth_multipliers.to(X.device)
+        bws = (self.get_bandwidth(L2_distances.detach()) * bw_mul)[:, None, None]
         beforeexp = -L2_distances[None, ...] / bws
         afterexp = torch.exp(beforeexp)
         return afterexp.sum(dim=0)
@@ -287,7 +294,9 @@ class BatchMMDLoss(torch.nn.Module):
 
     def forward(self, allX, allY):
         batch_size = allX.shape[0]
-        mmd = torch.tensor(0.)
+        # Initialize accumulator on the input's device so the loss runs
+        # cross-device cleanly without callers needing to .to() the loss.
+        mmd = torch.tensor(0., device=allX.device)
 
         for i in range(batch_size):
             X = allX[i, :, :]
