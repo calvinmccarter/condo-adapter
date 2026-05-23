@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import os
 import subprocess
 import sys
 import time
@@ -71,6 +72,8 @@ def fit_one(
     method_dir: Path,
     utils_dir: Path,
     python: str,
+    device: str = "cpu",
+    gpu_id: int | None = None,
 ) -> dict:
     tag = tag_for(cfg)
     out_h5 = sweep_dir / "outputs" / f"{tag}.h5ad"
@@ -107,15 +110,22 @@ def fit_one(
         str(cfg["weight_decay"]),
         "--random-state",
         str(cfg["random_state"]),
+        "--device",
+        device,
         "--input",
         dataset,
         "--output",
         str(out_h5),
     ]
 
+    # Optionally pin to a specific GPU for parallel workers.
+    env = dict(os.environ)
+    if gpu_id is not None:
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+
     t0 = time.time()
     with open(fit_log, "wb") as f:
-        rc = subprocess.call(fit_cmd, stdout=f, stderr=subprocess.STDOUT)
+        rc = subprocess.call(fit_cmd, stdout=f, stderr=subprocess.STDOUT, env=env)
     if rc != 0:
         return {
             "tag": tag,
@@ -174,7 +184,20 @@ def main() -> None:
         default=sys.executable,
         help="Python interpreter to use for subprocesses",
     )
+    parser.add_argument(
+        "--device",
+        default="cpu",
+        help="Torch device passed to the fit subprocess ('cpu', 'cuda', 'cuda:0', ...)",
+    )
+    parser.add_argument(
+        "--n-gpus",
+        type=int,
+        default=0,
+        help="If >0, rotate CUDA_VISIBLE_DEVICES across this many GPUs (round-robin by submission order). Implies --device cuda.",
+    )
     args = parser.parse_args()
+    if args.n_gpus > 0 and not args.device.startswith("cuda"):
+        args.device = "cuda"
 
     sweep_dir = Path(args.sweep_dir)
     (sweep_dir / "outputs").mkdir(parents=True, exist_ok=True)
@@ -192,14 +215,20 @@ def main() -> None:
         method_dir=Path(args.method_dir),
         utils_dir=Path(args.utils_dir),
         python=args.python,
+        device=args.device,
     )
+
+    def gpu_for(ix: int) -> int | None:
+        if args.n_gpus <= 0:
+            return None
+        return ix % args.n_gpus
 
     summary_path = sweep_dir / "sweep_summary.jsonl"
     summary_path.touch()
     with summary_path.open("a") as fsum:
         if args.parallel <= 1:
-            for cfg in configs:
-                res = fit_one(cfg, **common)
+            for ix, cfg in enumerate(configs):
+                res = fit_one(cfg, **common, gpu_id=gpu_for(ix))
                 fsum.write(json.dumps(res) + "\n")
                 fsum.flush()
                 print(
@@ -208,7 +237,10 @@ def main() -> None:
                 )
         else:
             with ProcessPoolExecutor(max_workers=args.parallel) as ex:
-                futures = {ex.submit(fit_one, cfg, **common): cfg for cfg in configs}
+                futures = {
+                    ex.submit(fit_one, cfg, **common, gpu_id=gpu_for(ix)): cfg
+                    for ix, cfg in enumerate(configs)
+                }
                 for fut in as_completed(futures):
                     res = fut.result()
                     fsum.write(json.dumps(res) + "\n")

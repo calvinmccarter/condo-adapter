@@ -40,6 +40,11 @@ def main() -> None:
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument(
+        "--device",
+        default="cpu",
+        help="Torch device: 'cpu', 'cuda', or e.g. 'cuda:0'",
+    )
+    parser.add_argument(
         "--method-dir",
         default=os.environ.get("CONDO_METHOD_DIR"),
         help=(
@@ -96,6 +101,7 @@ def main() -> None:
         "batch_size": args.batch_size,
         "weight_decay": args.weight_decay,
         "random_state": args.random_state,
+        "device": args.device,
     }
     meta = {"name": name, "resources_dir": str(utils_dir)}
     run_condo(par, meta)
