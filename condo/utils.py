@@ -116,7 +116,8 @@ class EarlyStopping:
         self.patience = patience
         self.counter = 0
         self.early_stop = False
-        self.loss_min = np.Inf
+        # NumPy 2.0 removed `np.Inf`; use `np.inf`.
+        self.loss_min = np.inf
         self.state_dict = None
         if model is not None:
             self.state_dict = deepcopy(model.state_dict())
@@ -189,8 +190,10 @@ class LinearAdapter(torch.nn.Module):
         )
 
     def get_M_b(self):
-        best_M = self.M.detach().numpy()
-        best_b = self.b.detach().numpy()
+        # `.cpu()` is a no-op when the tensor is already on CPU, so this
+        # path is safe regardless of where the module lives.
+        best_M = self.M.detach().cpu().numpy()
+        best_b = self.b.detach().cpu().numpy()
         return (best_M, best_b)
 
 

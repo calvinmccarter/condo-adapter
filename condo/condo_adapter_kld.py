@@ -19,6 +19,7 @@ class ConDoAdapterKLD:
         n_mice_iters: int = 2,
         random_state: int = 42,
         verbose: Union[bool, int] = 1,
+        device: Union[str, torch.device] = 'cpu',
     ):
         if transform_type not in {'location-scale', 'affine'}:
             raise NotImplementedError(f'transform_type {transform_type}')
@@ -29,6 +30,9 @@ class ConDoAdapterKLD:
         self.n_mice_iters = n_mice_iters
         self.random_state = random_state
         self.verbose = verbose
+        # Only the 'affine' path uses torch / GPU. 'location-scale' is a
+        # closed-form numpy computation; device is ignored there.
+        self.device = torch.device(device)
 
     def fit(
         self,
@@ -156,32 +160,37 @@ class ConDoAdapterKLD:
         if self.transform_type == 'location-scale':
             return self
 
+        device = self.device
         Est_mu_S = []
         Est_mu_T = []
         Est_Sigma_S = []
         Est_invSigma_T = []
         for n in range(n_test):
-            Est_mu_S.append(torch.from_numpy(est_mu_S_all[n, :].reshape(d, 1)))
-            Est_mu_T.append(torch.from_numpy(est_mu_T_all[n, :].reshape(d, 1)))
-            Est_Sigma_S.append(torch.from_numpy(est_Sigma_S_all[n, :, :]))
-            Est_invSigma_T.append(torch.from_numpy(est_invSigma_T_all[n, :, :]))
+            Est_mu_S.append(torch.from_numpy(est_mu_S_all[n, :].reshape(d, 1)).to(device))
+            Est_mu_T.append(torch.from_numpy(est_mu_T_all[n, :].reshape(d, 1)).to(device))
+            Est_Sigma_S.append(torch.from_numpy(est_Sigma_S_all[n, :, :]).to(device))
+            Est_invSigma_T.append(torch.from_numpy(est_invSigma_T_all[n, :, :]).to(device))
+
+        # W_test (per-condition weights) is needed inside the closure on the
+        # same device as everything else.
+        W_test_t = torch.from_numpy(W_test).to(device)
 
         def joint_reverse_kl_obj(mb):
             M = mb[0:d, :]  # (num_feats, num_feats)
             b = (mb[d, :]).view(d, 1)  # (num_feats, 1)
 
-            obj = torch.tensor(0.0, requires_grad=True)
+            obj = torch.tensor(0.0, requires_grad=True, device=device)
             for n in range(n_test):
                 # err_n has size (num_feats, 1)
                 err_n = M @ Est_mu_S[n] + b - Est_mu_T[n]
-                obj = obj + W_test[n, 0] * (
+                obj = obj + W_test_t[n, 0] * (
                     (err_n.T @ Est_invSigma_T[n] @ err_n).squeeze()
                     - torch.logdet(M @ Est_Sigma_S[n] @ M.T)
                     + torch.einsum('ij,ji->', Est_invSigma_T[n] @ M, Est_Sigma_S[n] @ M.T)
                 )
             return obj
 
-        mb_init = torch.from_numpy(np.vstack([np.diag(m_), b_]))
+        mb_init = torch.from_numpy(np.vstack([np.diag(m_), b_])).to(device)
         res = tm.minimize(
             joint_reverse_kl_obj,
             mb_init,
@@ -189,7 +198,7 @@ class ConDoAdapterKLD:
             max_iter=10,
             disp=self.verbose,
         )
-        mb_opt = res.x.numpy()
+        mb_opt = res.x.detach().cpu().numpy()
         M_ = mb_opt[0:d, :]  # (num_feats, num_feats)
         b_ = mb_opt[d, :]  # (num_feats,)
 

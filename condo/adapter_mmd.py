@@ -28,6 +28,7 @@ class AdapterMMD:
         weight_decay: float = 1e-4,
         random_state=42,
         verbose: Union[bool, int] = 1,
+        device: Union[str, torch.device] = 'cpu',
     ):
         transforms = {'location-scale', 'affine'}
         if transform_type not in transforms:
@@ -43,6 +44,7 @@ class AdapterMMD:
         self.weight_decay = weight_decay
         self.random_state = random_state
         self.verbose = verbose
+        self.device = torch.device(device)
         # bootsize = n_test * bootstrap_fraction sampled with replacement
         # so total dataset is of size n_test * n_bootstraps * bootstrap_fraction * n_impute
 
@@ -75,9 +77,11 @@ class AdapterMMD:
 
         dataset = AdapterDataset(S_list, T_list)
         train_loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+        device = self.device
         model = LinearAdapter(
             transform_type=self.transform_type,
             in_features=ds, out_features=dt, dtype=dataset.dtype())
+        model.to(device)
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay,
         )
@@ -93,6 +97,8 @@ class AdapterMMD:
             for bix, (Ssample, Tsample) in enumerate(train_loader):
                 if (epoch == 0) and (bix == 0) and self.verbose:
                     print("MMD sample shapes", Ssample.shape, Tsample.shape)
+                Ssample = Ssample.to(device)
+                Tsample = Tsample.to(device)
                 optimizer.zero_grad()
                 adaptedSsample = model(Ssample)
                 loss = loss_fn(adaptedSsample, Tsample)

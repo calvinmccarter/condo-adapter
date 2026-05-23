@@ -33,6 +33,7 @@ class ConDoAdapterMMD:
         weight_decay: float = 1e-4,
         random_state=42,
         verbose: Union[bool, int] = 1,
+        device: Union[str, torch.device] = 'cpu',
     ):
         transforms = {'location-scale', 'affine'}
         if transform_type not in transforms:
@@ -50,6 +51,7 @@ class ConDoAdapterMMD:
         self.weight_decay = weight_decay
         self.random_state = random_state
         self.verbose = verbose
+        self.device = torch.device(device)
         # bootsize = n_test * bootstrap_fraction sampled with replacement
         # each is then given n_imp impute samples
         # so total dataset is of size n_test * n_bootstraps * bootstrap_fraction * n_impute
@@ -159,9 +161,11 @@ class ConDoAdapterMMD:
             dataset = AdapterDataset(S_list, T_list)
             train_loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
+        device = self.device
         model = LinearAdapter(
             transform_type=self.transform_type,
             in_features=ds, out_features=dt, dtype=dataset.dtype())
+        model.to(device)
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay,
         )
@@ -184,6 +188,8 @@ class ConDoAdapterMMD:
                     assert Tsample.shape[0] == 1
                     Ssample = Ssample.reshape(Ssample.shape[1], Ssample.shape[2], Ssample.shape[3])
                     Tsample = Tsample.reshape(Tsample.shape[1], Tsample.shape[2], Tsample.shape[3])
+                Ssample = Ssample.to(device)
+                Tsample = Tsample.to(device)
                 optimizer.zero_grad()
                 adaptedSsample = model(Ssample)
                 loss = loss_fn(adaptedSsample, Tsample)
