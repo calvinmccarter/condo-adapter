@@ -35,6 +35,10 @@ def main() -> None:
     parser.add_argument("--bootstrap-fraction", type=float, default=1.0)
     parser.add_argument("--n-epochs", type=int, default=5)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--mmd-size", type=int, default=20)
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument(
         "--method-dir",
         default=os.environ.get("CONDO_METHOD_DIR"),
@@ -88,6 +92,10 @@ def main() -> None:
         "bootstrap_fraction": args.bootstrap_fraction,
         "n_epochs": args.n_epochs,
         "learning_rate": args.learning_rate,
+        "mmd_size": args.mmd_size,
+        "batch_size": args.batch_size,
+        "weight_decay": args.weight_decay,
+        "random_state": args.random_state,
     }
     meta = {"name": name, "resources_dir": str(utils_dir)}
     run_condo(par, meta)
