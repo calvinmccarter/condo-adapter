@@ -135,6 +135,24 @@ class EarlyStopping:
 
 
 class LinearAdapter(torch.nn.Module):
+    """Linear adapter parameterized so AdamW weight decay regularizes
+    toward the identity transform whenever that is meaningful.
+
+    When the transform is square (always the case for ``location-scale``;
+    only when ``in_features == out_features`` for ``affine``), ``self.M``
+    holds a *delta from identity*: at initialization it is zero, and the
+    effective transform is ``(I + ΔM)`` (or ``(1 + Δm)`` element-wise for
+    location-scale). AdamW's pull-toward-zero then translates into a pull
+    toward identity in the effective transform.
+
+    For non-square affine maps, identity isn't defined, so we fall back to
+    the legacy parameterization: ``self.M`` is initialized via
+    ``torch.nn.init.eye_`` (rectangular identity-like) and weight decay
+    pulls it toward zero. The non-square case isn't used by the
+    batch-integration runner, but is preserved here for parity with the
+    earlier API.
+    """
+
     def __init__(
         self,
         transform_type: str,
@@ -148,6 +166,10 @@ class LinearAdapter(torch.nn.Module):
         self.transform_type = transform_type
         self.in_features = in_features
         self.out_features = out_features
+        # Delta-from-identity parameterization is used iff the transform is
+        # square (always so for location-scale). Recorded once so
+        # forward / get_M_b can branch cheaply.
+        self.is_square = in_features == out_features
 
         if transform_type == "location-scale":
             assert in_features == out_features
@@ -165,28 +187,41 @@ class LinearAdapter(torch.nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        if self.transform_type == "location-scale":
-            torch.nn.init.ones_(self.M)
-            torch.nn.init.zeros_(self.b)
-        elif self.transform_type == "affine":
+        # b always starts at zero (identity translation).
+        torch.nn.init.zeros_(self.b)
+        if self.is_square:
+            # M holds a delta from identity; initial delta is zero.
+            torch.nn.init.zeros_(self.M)
+        else:
+            # Non-square affine: legacy eye_ init, regularizes toward zero.
             torch.nn.init.eye_(self.M)
-            torch.nn.init.zeros_(self.b)
 
     def forward(self, S: torch.Tensor) -> torch.Tensor:
         (batch_size, n_mice_impute, ds) = S.shape
         S_ = S.reshape(-1, ds)
         if self.transform_type == "location-scale":
-            adaptedSsample = S_ * self.M.reshape(1, -1) + self.b.reshape(1, -1)
+            # Effective scale is 1 + ΔM, applied elementwise.
+            adaptedSsample = (
+                S_ * (1.0 + self.M).reshape(1, -1) + self.b.reshape(1, -1)
+            )
         elif self.transform_type == "affine":
-            adaptedSsample = S_ @ self.M.T + self.b.reshape(1, -1)
+            if self.is_square:
+                # Effective M is (I + ΔM); compute S @ (I + ΔM)^T = S + S @ ΔM^T
+                # to avoid materializing the d×d identity each forward.
+                adaptedSsample = S_ + S_ @ self.M.T + self.b.reshape(1, -1)
+            else:
+                adaptedSsample = S_ @ self.M.T + self.b.reshape(1, -1)
         adaptedSsample = adaptedSsample.reshape(batch_size, n_mice_impute, -1)
         return adaptedSsample
 
     def extra_repr(self) -> str:
-        return "transform_type={}, in_features={}, out_features={}".format(
+        return (
+            "transform_type={}, in_features={}, out_features={}, delta_param={}"
+        ).format(
             self.transform_type,
             self.in_features,
             self.out_features,
+            self.is_square,
         )
 
     def get_M_b(self):
@@ -194,6 +229,13 @@ class LinearAdapter(torch.nn.Module):
         # path is safe regardless of where the module lives.
         best_M = self.M.detach().cpu().numpy()
         best_b = self.b.detach().cpu().numpy()
+        if self.is_square:
+            # Recover the effective transform that downstream numpy code
+            # (transform / inverse_transform) expects.
+            if self.transform_type == "location-scale":
+                best_M = best_M + 1.0
+            else:  # square affine
+                best_M = best_M + np.eye(best_M.shape[0], dtype=best_M.dtype)
         return (best_M, best_b)
 
 
