@@ -239,65 +239,6 @@ class LinearAdapter(torch.nn.Module):
         return (best_M, best_b)
 
 
-"""
-class LinearAdapter(torch.nn.Module):
-    def __init__(
-        self,
-        transform_type: str,
-        num_feats: int,
-        device=None,
-        dtype=None,
-    ) -> None:
-        factory_kwargs = {"device": device, "dtype": dtype}
-        super().__init__()
-        self.transform_type = transform_type
-        self.num_feats = num_feats
-
-        if transform_type == "location-scale":
-            self.M = torch.nn.Parameter(torch.empty(num_feats, **factory_kwargs))
-            self.b = torch.nn.Parameter(torch.empty(num_feats, **factory_kwargs))
-
-        elif transform_type == "affine":
-            self.M = torch.nn.Parameter(
-                torch.empty((num_feats, num_feats), **factory_kwargs)
-            )
-            self.b = torch.nn.Parameter(torch.empty(num_feats, **factory_kwargs))
-        else:
-            raise ValueError(f"invalid transform_type:{transform_type}")
-        self.reset_parameters()
-
-    def reset_parameters(self) -> None:
-        if self.transform_type == "location-scale":
-            torch.nn.init.zeros_(self.M)
-            torch.nn.init.zeros_(self.b)
-        elif self.transform_type == "affine":
-            torch.nn.init.zeros_(self.M)
-            torch.nn.init.zeros_(self.b)
-
-    def forward(self, S: torch.Tensor) -> torch.Tensor:
-        if self.transform_type == "location-scale":
-            adaptedSsample = S * self.M.reshape(1, -1) + self.b.reshape(1, -1) + S
-        elif self.transform_type == "affine":
-            adaptedSsample = S @ self.M.T + self.b.reshape(1, -1) + S
-        return adaptedSsample
-
-    def extra_repr(self) -> str:
-        return "transform_type={}, num_feats={}".format(
-            self.transform_type,
-            self.num_feats,
-        )
-
-    def get_M_b(self):
-        best_M = self.M.detach().numpy()
-        best_b = self.b.detach().numpy()
-        if best_M.ndim == 1:
-            best_M = best_M + 1.
-        else:
-            best_M = best_M + np.eye(self.num_feats, dtype=best_M.dtype)
-        return (best_M, best_b)
-"""
-
-
 class RBF(torch.nn.Module):
     """https://github.com/yiftachbeer/mmd_loss_pytorch"""
     def __init__(self, n_kernels=1, mul_factor=2.0, bandwidth=None):
