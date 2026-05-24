@@ -29,10 +29,13 @@ class AdapterMMD:
         random_state=42,
         verbose: Union[bool, int] = 1,
         device: Union[str, torch.device] = 'cpu',
+        optimizer: str = 'adamw',
     ):
         transforms = {'location-scale', 'affine'}
         if transform_type not in transforms:
             raise NotImplementedError(f'transform_type {transform_type}')
+        if optimizer not in {'adamw', 'muon'}:
+            raise ValueError(f'optimizer must be adamw or muon; got {optimizer!r}')
         assert bootstrap_fraction <= 1
         self.transform_type = transform_type
         self.bootstrap_fraction = bootstrap_fraction
@@ -45,6 +48,7 @@ class AdapterMMD:
         self.random_state = random_state
         self.verbose = verbose
         self.device = torch.device(device)
+        self.optimizer = optimizer
         # bootsize = n_test * bootstrap_fraction sampled with replacement
         # so total dataset is of size n_test * n_bootstraps * bootstrap_fraction * n_impute
 
@@ -82,9 +86,17 @@ class AdapterMMD:
             transform_type=self.transform_type,
             in_features=ds, out_features=dt, dtype=dataset.dtype())
         model.to(device)
-        optimizer = torch.optim.AdamW(
-            model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay,
-        )
+        if self.optimizer == 'muon':
+            from condo.muon import Muon, make_param_groups
+            optimizer = Muon(
+                make_param_groups(model),
+                lr=self.learning_rate,
+                weight_decay=self.weight_decay,
+            )
+        else:
+            optimizer = torch.optim.AdamW(
+                model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay,
+            )
         early_stopping = EarlyStopping(patience=3, model=model)
         loss_fn = BatchMMDLoss()
         n_batches = len(train_loader)
