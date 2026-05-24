@@ -28,11 +28,15 @@ BATCH_METRICS = (
 
 
 def tag_for(cfg: dict) -> str:
-    return (
+    base = (
         "ne{n_epochs}_lr{learning_rate:.0e}"
         "_ms{mmd_size}_bs{batch_size}"
         "_wd{weight_decay:.0e}_seed{random_state}"
     ).format(**cfg)
+    opt = cfg.get("optimizer", "adamw")
+    if opt != "adamw":
+        base = base + f"_{opt}"
+    return base
 
 
 def composite(scores: dict[str, float]) -> tuple[float, float, float]:

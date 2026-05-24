@@ -37,30 +37,92 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]  # condo-adapter
 DEFAULT_FORK = REPO.parent / "task_batch_integration_forked"
 
-GRID = {
+# --- AdamW grids ----------------------------------------------------------
+# Original 54-config grid (n_epochs × lr × mmd_size × seed).
+GRID_V1 = {
     "n_epochs": [5, 30, 100],
     "learning_rate": [1e-3, 3e-3, 1e-2],
     "mmd_size": [20, 40],
     "batch_size": [8],
     "weight_decay": [1e-4],
     "random_state": [42, 7, 1729],
+    "optimizer": ["adamw"],
+}
+# Low-lr follow-up at n_epochs=5 with extended mmd_size.
+GRID_V2 = {
+    "n_epochs": [5],
+    "learning_rate": [1e-4, 3e-4, 1e-3],
+    "mmd_size": [20, 40, 80],
+    "batch_size": [8],
+    "weight_decay": [1e-4],
+    "random_state": [42, 7, 1729],
+    "optimizer": ["adamw"],
+}
+
+# --- Muon grids -----------------------------------------------------------
+# Same shape as the AdamW grid, lr ranges shifted ~10x upward to match Muon's
+# normalized-update step size. Recommended Muon defaults around lr=2e-2.
+GRID_MUON_V1 = {
+    "n_epochs": [5, 30, 100],
+    "learning_rate": [1e-2, 3e-2, 1e-1],
+    "mmd_size": [20, 40],
+    "batch_size": [8],
+    "weight_decay": [1e-4],
+    "random_state": [42, 7, 1729],
+    "optimizer": ["muon"],
+}
+GRID_MUON_V2 = {
+    "n_epochs": [5],
+    "learning_rate": [1e-3, 3e-3, 1e-2],
+    "mmd_size": [20, 40, 80],
+    "batch_size": [8],
+    "weight_decay": [1e-4],
+    "random_state": [42, 7, 1729],
+    "optimizer": ["muon"],
+}
+
+GRIDS = {
+    "adamw": [GRID_V1, GRID_V2],
+    "muon": [GRID_MUON_V1, GRID_MUON_V2],
 }
 
 
-def iter_configs() -> list[dict]:
-    keys = list(GRID)
-    out = []
-    for combo in itertools.product(*(GRID[k] for k in keys)):
-        out.append(dict(zip(keys, combo)))
+def _expand(grid: dict) -> list[dict]:
+    keys = list(grid)
+    return [
+        dict(zip(keys, combo))
+        for combo in itertools.product(*(grid[k] for k in keys))
+    ]
+
+
+def iter_configs(which: str = "adamw") -> list[dict]:
+    if which not in GRIDS:
+        raise ValueError(f"unknown grid {which!r}; pick one of {list(GRIDS)}")
+    seen: set[str] = set()
+    out: list[dict] = []
+    for grid in GRIDS[which]:
+        for cfg in _expand(grid):
+            t = tag_for(cfg)
+            if t in seen:
+                continue
+            seen.add(t)
+            out.append(cfg)
     return out
 
 
 def tag_for(cfg: dict) -> str:
-    return (
+    base = (
         "ne{n_epochs}_lr{learning_rate:.0e}"
         "_ms{mmd_size}_bs{batch_size}"
         "_wd{weight_decay:.0e}_seed{random_state}"
     ).format(**cfg)
+    # Include optimizer in the tag only when it's not the default 'adamw',
+    # so legacy adamw tags (and the existing pull_to_zero / pull_to_identity
+    # archives) keep their original names and remain resumable.
+    opt = cfg.get("optimizer", "adamw")
+    if opt != "adamw":
+        base = base + f"_{opt}"
+    return base
 
 
 def fit_one(
@@ -112,6 +174,8 @@ def fit_one(
         str(cfg["random_state"]),
         "--device",
         device,
+        "--optimizer",
+        str(cfg.get("optimizer", "adamw")),
         "--input",
         dataset,
         "--output",
@@ -195,6 +259,12 @@ def main() -> None:
         default=0,
         help="If >0, rotate CUDA_VISIBLE_DEVICES across this many GPUs (round-robin by submission order). Implies --device cuda.",
     )
+    parser.add_argument(
+        "--grid",
+        choices=list(GRIDS),
+        default="adamw",
+        help="Which grid set to expand (adamw or muon).",
+    )
     args = parser.parse_args()
     if args.n_gpus > 0 and not args.device.startswith("cuda"):
         args.device = "cuda"
@@ -204,8 +274,11 @@ def main() -> None:
     (sweep_dir / "results").mkdir(parents=True, exist_ok=True)
     (sweep_dir / "logs").mkdir(parents=True, exist_ok=True)
 
-    configs = iter_configs()
-    print(f"Sweep: {len(configs)} configs, parallel={args.parallel}", flush=True)
+    configs = iter_configs(args.grid)
+    print(
+        f"Sweep: {len(configs)} configs, parallel={args.parallel}, grid={args.grid}",
+        flush=True,
+    )
     (sweep_dir / "grid.json").write_text(json.dumps(configs, indent=2))
 
     common = dict(

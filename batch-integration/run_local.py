@@ -45,6 +45,12 @@ def main() -> None:
         help="Torch device: 'cpu', 'cuda', or e.g. 'cuda:0'",
     )
     parser.add_argument(
+        "--optimizer",
+        choices=["adamw", "muon"],
+        default="adamw",
+        help="Optimizer for MMD SGD training. Ignored for divergence=kld.",
+    )
+    parser.add_argument(
         "--method-dir",
         default=os.environ.get("CONDO_METHOD_DIR"),
         help=(
@@ -102,6 +108,7 @@ def main() -> None:
         "weight_decay": args.weight_decay,
         "random_state": args.random_state,
         "device": args.device,
+        "optimizer": args.optimizer,
     }
     meta = {"name": name, "resources_dir": str(utils_dir)}
     run_condo(par, meta)
