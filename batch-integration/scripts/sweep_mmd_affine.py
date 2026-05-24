@@ -84,6 +84,19 @@ GRID_MUON_V2 = {
 GRIDS = {
     "adamw": [GRID_V1, GRID_V2],
     "muon": [GRID_MUON_V1, GRID_MUON_V2],
+    "bswd": [
+        # batch_size × weight_decay refinement around the AdamW
+        # pull_to_identity winner: ne=5, lr=1e-3, ms=40, opt=adamw.
+        {
+            "n_epochs": [5],
+            "learning_rate": [1e-3],
+            "mmd_size": [40],
+            "batch_size": [4, 8, 16, 32, 64],
+            "weight_decay": [1e-5, 1e-4, 1e-3, 1e-2, 1e-1],
+            "random_state": [42, 7, 1729],
+            "optimizer": ["adamw"],
+        }
+    ],
 }
 
 
