@@ -17,13 +17,21 @@ from pathlib import Path
 from statistics import mean
 
 
-BIO_METRICS = ("asw_label", "nmi", "ari")
+BIO_METRICS = (
+    "asw_label",
+    "nmi",
+    "ari",
+    "isolated_label_f1",
+    "isolated_label_asw",
+    "clisi",
+    "hvg_overlap",
+)
 BATCH_METRICS = (
     "asw_batch",
     "graph_connectivity",
     "pcr",
-    "ari_batch",
-    "nmi_batch",
+    "ilisi",
+    "kbet",
 )
 
 

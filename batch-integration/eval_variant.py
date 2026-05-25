@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import time
 import traceback
 from pathlib import Path
@@ -26,6 +28,16 @@ from typing import Any, Callable
 import anndata as ad
 import numpy as np
 import scanpy as sc
+
+
+_HERE = Path(__file__).resolve().parent
+_KBET_VENV_PY = Path(
+    os.environ.get(
+        "CONDO_KBET_PYTHON",
+        _HERE.parent.parent / ".venv-kbet" / "bin" / "python",
+    )
+)
+_KBET_SCRIPT = _HERE / "scripts" / "compute_kbet.py"
 
 
 def _ensure_processed(integrated: ad.AnnData, dataset: ad.AnnData) -> ad.AnnData:
@@ -147,7 +159,7 @@ def evaluate(integrated_path: str, dataset_path: str, solution_path: str) -> lis
             }
         )
 
-    # ----------------------------------------------- clustering_overlap (4)
+    # ----------------------------------------------- clustering_overlap (ari + nmi)
     try:
         from scib.metrics.clustering import cluster_optimal_resolution
         from scib.metrics import nmi, ari
@@ -173,24 +185,243 @@ def evaluate(integrated_path: str, dataset_path: str, solution_path: str) -> lis
                 lambda: nmi(adata_clust, cluster_key="leiden", label_key="cell_type"),
             )
         )
+    except Exception as exc:
+        results.append(
+            {
+                "metric": "clustering_overlap",
+                "error": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(limit=3),
+            }
+        )
+
+    # ---------------------------------------------------------- isolated labels
+    # Matches src/metrics/isolated_label_{f1,asw}/script.py, but with one
+    # tweak: scib >= 1.1.7 added a guard in get_isolated_labels that returns
+    # NaN when every cell type appears in every batch (the metric
+    # degenerates into mean asw_label / mean f1 per cell type in that case).
+    # Older scib (which the published baseline ran on) silently computed
+    # the degenerate quantity, so its yaml has real numbers. We bypass the
+    # guard in that case to keep our composite directly comparable.
+    try:
+        from scib.metrics import isolated_labels_asw, isolated_labels_f1
+
+        tmp = integrated.obs[["cell_type", "batch"]].drop_duplicates()
+        batch_per_lab = tmp.groupby("cell_type", observed=True).agg({"batch": "count"})
+        default_threshold = int(batch_per_lab.min().tolist()[0])
+        n_batches = integrated.obs["batch"].nunique()
+        iso_thr_override = (
+            n_batches + 1 if default_threshold == n_batches else None
+        )
+
         results.append(
             _safe(
-                "ari_batch",
-                lambda: 1
-                - ari(adata_clust, cluster_key="leiden", label_key="batch"),
+                "isolated_label_asw",
+                lambda: isolated_labels_asw(
+                    integrated,
+                    label_key="cell_type",
+                    batch_key="batch",
+                    embed="X_emb",
+                    iso_threshold=iso_thr_override,
+                    verbose=False,
+                ),
             )
         )
+        # isolated_labels_f1 needs a clustering column — reuse the leiden
+        # column from cluster_optimal_resolution above.
+        adata_clust2 = integrated.copy()
+        adata_clust2.obs["leiden"] = adata_clust.obs["leiden"]
         results.append(
             _safe(
-                "nmi_batch",
-                lambda: 1
-                - nmi(adata_clust, cluster_key="leiden", label_key="batch"),
+                "isolated_label_f1",
+                lambda: isolated_labels_f1(
+                    adata_clust2,
+                    label_key="cell_type",
+                    batch_key="batch",
+                    cluster_key="leiden",
+                    resolutions=[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+                    embed=None,
+                    iso_threshold=iso_thr_override,
+                    verbose=False,
+                ),
             )
         )
     except Exception as exc:
         results.append(
             {
-                "metric": "clustering_overlap",
+                "metric": "isolated_labels",
+                "error": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(limit=3),
+            }
+        )
+
+    # ---------------------------------------------------------- hvg_overlap
+    # Mirrors src/metrics/hvg_overlap/script.py.
+    try:
+        from scib.metrics import hvg_overlap
+        from scib.utils import split_batches
+
+        adata_solution = ad.AnnData(
+            X=solution.layers["normalized"],
+            obs=solution.obs.copy(),
+            var=solution.var.copy(),
+            uns=dict(solution.uns),
+        )
+        # The integrated AnnData needs .X populated for the per-batch HVG
+        # computation; the official script reads X='layers/corrected_counts'
+        # directly, so do the equivalent here.
+        if "corrected_counts" in integrated.layers:
+            corrected_X = integrated.layers["corrected_counts"]
+        elif integrated.X is not None:
+            corrected_X = integrated.X
+        else:
+            raise RuntimeError(
+                "hvg_overlap needs either corrected_counts layer or .X on integrated"
+            )
+        adata_integrated_hvg = ad.AnnData(
+            X=corrected_X,
+            obs=integrated.obs.copy(),
+            var=integrated.var.copy(),
+        )
+        adata_integrated_hvg.obs["batch"] = solution.obs.loc[
+            integrated.obs.index, "batch"
+        ].values
+
+        adata_list = split_batches(
+            adata_solution, "batch", hvg=adata_integrated_hvg.var_names
+        )
+        skip = []
+        for ab in adata_list:
+            sc.pp.filter_genes(ab, min_cells=1)
+            n_hvg_tmp = np.minimum(500, int(0.5 * ab.n_vars))
+            if n_hvg_tmp < 500:
+                # .iloc[0] avoids the pandas positional-vs-label warning
+                # the official script still triggers; semantically the
+                # same value.
+                skip.append(ab.obs["batch"].iloc[0])
+        if skip:
+            adata_solution = adata_solution[
+                ~adata_solution.obs["batch"].isin(skip)
+            ].copy()
+            adata_integrated_hvg = adata_integrated_hvg[
+                ~adata_integrated_hvg.obs["batch"].isin(skip)
+            ].copy()
+
+        results.append(
+            _safe(
+                "hvg_overlap",
+                lambda: hvg_overlap(
+                    adata_solution[
+                        :, adata_solution.var_names.isin(adata_integrated_hvg.var_names)
+                    ],
+                    adata_integrated_hvg,
+                    batch_key="batch",
+                ),
+            )
+        )
+    except Exception as exc:
+        results.append(
+            {
+                "metric": "hvg_overlap",
+                "error": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(limit=3),
+            }
+        )
+
+    # ---------------------------------------------------------- kbet
+    # Runs in the sibling .venv-kbet (numpy<2, scipy<=1.13, rpy2 3.5.x +
+    # theislab/kBET R package). Skipped if the venv isn't present.
+    try:
+        if not _KBET_VENV_PY.exists():
+            results.append(
+                {"metric": "kbet", "error": f"venv not found at {_KBET_VENV_PY}"}
+            )
+        else:
+            t0 = time.time()
+            env = dict(os.environ, R_HOME="/usr/lib/R")
+            proc = subprocess.run(
+                [
+                    str(_KBET_VENV_PY),
+                    str(_KBET_SCRIPT),
+                    "--integrated",
+                    integrated_path,
+                    "--solution",
+                    solution_path,
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=60 * 60,
+            )
+            if proc.returncode == 0:
+                # The subprocess prints lines of progress then a single
+                # JSON object at the end; parse the last non-empty line.
+                last = next(
+                    ln for ln in reversed(proc.stdout.splitlines()) if ln.strip()
+                )
+                score = float(json.loads(last)["score"])
+                results.append(
+                    {"metric": "kbet", "score": score, "dt": time.time() - t0}
+                )
+            else:
+                results.append(
+                    {
+                        "metric": "kbet",
+                        "error": f"subprocess exit {proc.returncode}",
+                        "stderr": proc.stderr[-2000:],
+                        "dt": time.time() - t0,
+                    }
+                )
+    except Exception as exc:
+        results.append(
+            {
+                "metric": "kbet",
+                "error": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(limit=3),
+            }
+        )
+
+    # ---------------------------------------------------------- iLISI / cLISI
+    # Matches src/metrics/lisi/script.py. The lisi_graph_py call returns raw
+    # LISI scores; the normalization below converts to [0,1] with higher =
+    # better, as the official script does.
+    try:
+        from scib.metrics.lisi import lisi_graph_py
+
+        n_batches = integrated.obs["batch"].nunique()
+        n_labels = integrated.obs["cell_type"].nunique()
+
+        def _ilisi():
+            scores = lisi_graph_py(
+                adata=integrated,
+                obs_key="batch",
+                n_neighbors=90,
+                perplexity=None,
+                subsample=None,
+                n_cores=1,
+                verbose=False,
+            )
+            med = np.nanmedian(scores)
+            return (med - 1) / (n_batches - 1)
+
+        def _clisi():
+            scores = lisi_graph_py(
+                adata=integrated,
+                obs_key="cell_type",
+                n_neighbors=90,
+                perplexity=None,
+                subsample=None,
+                n_cores=1,
+                verbose=False,
+            )
+            med = np.nanmedian(scores)
+            return (n_labels - med) / (n_labels - 1)
+
+        results.append(_safe("ilisi", _ilisi))
+        results.append(_safe("clisi", _clisi))
+    except Exception as exc:
+        results.append(
+            {
+                "metric": "lisi",
                 "error": f"{type(exc).__name__}: {exc}",
                 "traceback": traceback.format_exc(limit=3),
             }
