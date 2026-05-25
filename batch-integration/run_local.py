@@ -51,6 +51,22 @@ def main() -> None:
         help="Optimizer for MMD SGD training. Ignored for divergence=kld.",
     )
     parser.add_argument(
+        "--target-batch",
+        default=None,
+        help="Explicit target batch label (overrides --target-mode).",
+    )
+    parser.add_argument(
+        "--target-mode",
+        choices=["best_pre_asw", "largest"],
+        default="best_pre_asw",
+        help=(
+            "Heuristic to pick a target batch when --target-batch is not "
+            "given. best_pre_asw (default) picks the batch with the highest "
+            "pre-integration silhouette of cell_type on obsm['X_pca']; "
+            "largest is the legacy behaviour."
+        ),
+    )
+    parser.add_argument(
         "--method-dir",
         default=os.environ.get("CONDO_METHOD_DIR"),
         help=(
@@ -109,6 +125,8 @@ def main() -> None:
         "random_state": args.random_state,
         "device": args.device,
         "optimizer": args.optimizer,
+        "target_batch": args.target_batch,
+        "target_mode": args.target_mode,
     }
     meta = {"name": name, "resources_dir": str(utils_dir)}
     run_condo(par, meta)
