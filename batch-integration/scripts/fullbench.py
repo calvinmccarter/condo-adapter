@@ -89,15 +89,21 @@ def fit_and_eval(
     if gpu_id is not None:
         env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
-    t0 = time.time()
-    with open(fit_log, "wb") as f:
-        rc = subprocess.call(fit_cmd, stdout=f, stderr=subprocess.STDOUT, env=env)
-    if rc != 0:
-        return {
-            "dataset": ds, "status": "fit_failed",
-            "fit_log": str(fit_log), "dt": time.time() - t0,
-        }
-    fit_dt = time.time() - t0
+    if out_h5.exists() and out_h5.stat().st_size > 0:
+        # Reuse a prior fit; only the eval is missing.
+        fit_dt = 0.0
+    else:
+        t0 = time.time()
+        with open(fit_log, "wb") as f:
+            rc = subprocess.call(
+                fit_cmd, stdout=f, stderr=subprocess.STDOUT, env=env
+            )
+        if rc != 0:
+            return {
+                "dataset": ds, "status": "fit_failed",
+                "fit_log": str(fit_log), "dt": time.time() - t0,
+            }
+        fit_dt = time.time() - t0
 
     eval_cmd = [
         python,
