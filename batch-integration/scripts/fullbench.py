@@ -160,8 +160,8 @@ def main() -> None:
     parser.add_argument(
         "--target-mode",
         dest="target_mode",
-        default="best_pre_asw",
-        choices=["best_pre_asw", "largest", "agglomerative"],
+        default="agglomerative",
+        choices=["best_pre_asw", "agglomerative"],
     )
     args = parser.parse_args()
 

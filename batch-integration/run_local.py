@@ -57,15 +57,14 @@ def main() -> None:
     )
     parser.add_argument(
         "--target-mode",
-        choices=["best_pre_asw", "largest", "agglomerative"],
-        default="best_pre_asw",
+        choices=["best_pre_asw", "agglomerative"],
+        default="agglomerative",
         help=(
-            "Heuristic to pick a target batch when --target-batch is not "
-            "given. best_pre_asw (default) picks the batch with the highest "
-            "pre-integration silhouette of cell_type on obsm['X_pca']; "
-            "largest is the legacy behaviour; agglomerative walks the "
-            "compatibility graph from the highest-pre_asw seed, growing "
-            "the target pool by merging batches one at a time."
+            "Heuristic to pick the integration target when --target-batch "
+            "is not given. 'agglomerative' (default) walks the batch "
+            "compatibility graph from the highest-pre_asw seed and grows "
+            "the target pool by merging batches one at a time. "
+            "'best_pre_asw' is the simpler single-seed variant."
         ),
     )
     parser.add_argument(
