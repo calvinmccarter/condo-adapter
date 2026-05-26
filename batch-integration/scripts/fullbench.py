@@ -80,7 +80,6 @@ def fit_and_eval(
         "--weight-decay", str(config.get("weight_decay", 1e-4)),
         "--random-state", str(config.get("random_state", 42)),
         "--optimizer", config.get("optimizer", "adamw"),
-        "--target-mode", config.get("target_mode", "best_pre_asw"),
         "--input", str(dataset),
         "--output", str(out_h5),
     ]
@@ -157,12 +156,6 @@ def main() -> None:
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--optimizer", default="adamw")
-    parser.add_argument(
-        "--target-mode",
-        dest="target_mode",
-        default="agglomerative",
-        choices=["best_pre_asw", "agglomerative"],
-    )
     args = parser.parse_args()
 
     sweep_dir = Path(args.sweep_dir)
@@ -181,7 +174,6 @@ def main() -> None:
         "weight_decay": args.weight_decay,
         "random_state": args.random_state,
         "optimizer": args.optimizer,
-        "target_mode": args.target_mode,
     }
     (sweep_dir / "config.json").write_text(json.dumps(config, indent=2))
 
