@@ -1,6 +1,11 @@
 from .adapter_mmd import AdapterMMD
 from .adapter_wd import AdapterWD
 from .adapter_gaussian_ot import AdapterGaussianOT
+from .batch_integration import (
+    AgglomerativeIntegrationResult,
+    agglomerative_integrate,
+    build_compatibility_graph,
+)
 from .condo_adapter_kld import ConDoAdapterKLD
 from .condo_adapter_mmd import ConDoAdapterMMD
 from .condo_adapter_wd import ConDoAdapterWD
