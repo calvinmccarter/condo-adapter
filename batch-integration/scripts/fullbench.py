@@ -161,7 +161,7 @@ def main() -> None:
         "--target-mode",
         dest="target_mode",
         default="best_pre_asw",
-        choices=["best_pre_asw", "largest"],
+        choices=["best_pre_asw", "largest", "agglomerative"],
     )
     args = parser.parse_args()
 
