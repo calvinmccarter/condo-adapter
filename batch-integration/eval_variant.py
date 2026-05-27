@@ -427,6 +427,31 @@ def evaluate(integrated_path: str, dataset_path: str, solution_path: str) -> lis
             }
         )
 
+    # -------------------------------------------- cell_cycle_conservation
+    # Mirrors src/metrics/cell_cycle_conservation/script.py: pre = normalized
+    # solution with gene-symbol var_names, post = integrated (embed='X_emb'),
+    # organism from solution.uns. scib needs cell-cycle marker genes present
+    # in var; _safe records the error if they are absent (openproblems only
+    # enables ccc on some datasets), so this is harmless to attempt always.
+    def _ccc():
+        from scib.metrics import cell_cycle
+
+        adata_pre = ad.AnnData(
+            X=solution.layers["normalized"],
+            obs=solution.obs.copy(),
+            var=solution.var.copy(),
+        )
+        adata_pre.var_names = solution.var["feature_name"].astype(str).values
+        return cell_cycle(
+            adata_pre,
+            integrated,
+            batch_key="batch",
+            embed="X_emb",
+            organism=solution.uns["dataset_organism"],
+        )
+
+    results.append(_safe("cell_cycle_conservation", _ccc))
+
     return results
 
 
