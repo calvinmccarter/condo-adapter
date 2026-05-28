@@ -38,17 +38,17 @@ def main() -> None:
     parser.add_argument("--mmd-size", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--wd-on-bias", dest="wd_on_bias",
+                        action="store_true",
+                        help="apply --weight-decay to the bias (location) "
+                             "parameter too (default: bias has weight_decay=0)")
+    parser.add_argument("--patience", type=int, default=3,
+                        help="early-stopping patience for the MMD training")
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument(
         "--device",
         default="cpu",
         help="Torch device: 'cpu', 'cuda', or e.g. 'cuda:0'",
-    )
-    parser.add_argument(
-        "--optimizer",
-        choices=["adamw", "muon"],
-        default="adamw",
-        help="Optimizer for MMD SGD training. Ignored for divergence=kld.",
     )
     parser.add_argument(
         "--method-dir",
@@ -106,9 +106,10 @@ def main() -> None:
         "mmd_size": args.mmd_size,
         "batch_size": args.batch_size,
         "weight_decay": args.weight_decay,
+        "wd_on_bias": args.wd_on_bias,
+        "patience": args.patience,
         "random_state": args.random_state,
         "device": args.device,
-        "optimizer": args.optimizer,
     }
     meta = {"name": name, "resources_dir": str(utils_dir)}
     run_condo(par, meta)

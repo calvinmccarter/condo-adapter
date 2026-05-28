@@ -46,7 +46,6 @@ GRID_V1 = {
     "batch_size": [8],
     "weight_decay": [1e-4],
     "random_state": [42, 7, 1729],
-    "optimizer": ["adamw"],
 }
 # Low-lr follow-up at n_epochs=5 with extended mmd_size.
 GRID_V2 = {
@@ -56,37 +55,13 @@ GRID_V2 = {
     "batch_size": [8],
     "weight_decay": [1e-4],
     "random_state": [42, 7, 1729],
-    "optimizer": ["adamw"],
-}
-
-# --- Muon grids -----------------------------------------------------------
-# Same shape as the AdamW grid, lr ranges shifted ~10x upward to match Muon's
-# normalized-update step size. Recommended Muon defaults around lr=2e-2.
-GRID_MUON_V1 = {
-    "n_epochs": [5, 30, 100],
-    "learning_rate": [1e-2, 3e-2, 1e-1],
-    "mmd_size": [20, 40],
-    "batch_size": [8],
-    "weight_decay": [1e-4],
-    "random_state": [42, 7, 1729],
-    "optimizer": ["muon"],
-}
-GRID_MUON_V2 = {
-    "n_epochs": [5],
-    "learning_rate": [1e-3, 3e-3, 1e-2],
-    "mmd_size": [20, 40, 80],
-    "batch_size": [8],
-    "weight_decay": [1e-4],
-    "random_state": [42, 7, 1729],
-    "optimizer": ["muon"],
 }
 
 GRIDS = {
     "adamw": [GRID_V1, GRID_V2],
-    "muon": [GRID_MUON_V1, GRID_MUON_V2],
     "bswd": [
-        # batch_size × weight_decay refinement around the AdamW
-        # pull_to_identity winner: ne=5, lr=1e-3, ms=40, opt=adamw.
+        # batch_size × weight_decay refinement around the pull_to_identity
+        # winner: ne=5, lr=1e-3, ms=40.
         {
             "n_epochs": [5],
             "learning_rate": [1e-3],
@@ -94,7 +69,6 @@ GRIDS = {
             "batch_size": [4, 8, 16, 32, 64],
             "weight_decay": [1e-5, 1e-4, 1e-3, 1e-2, 1e-1],
             "random_state": [42, 7, 1729],
-            "optimizer": ["adamw"],
         }
     ],
 }
@@ -124,18 +98,11 @@ def iter_configs(which: str = "adamw") -> list[dict]:
 
 
 def tag_for(cfg: dict) -> str:
-    base = (
+    return (
         "ne{n_epochs}_lr{learning_rate:.0e}"
         "_ms{mmd_size}_bs{batch_size}"
         "_wd{weight_decay:.0e}_seed{random_state}"
     ).format(**cfg)
-    # Include optimizer in the tag only when it's not the default 'adamw',
-    # so legacy adamw tags (and the existing pull_to_zero / pull_to_identity
-    # archives) keep their original names and remain resumable.
-    opt = cfg.get("optimizer", "adamw")
-    if opt != "adamw":
-        base = base + f"_{opt}"
-    return base
 
 
 def fit_one(
@@ -187,8 +154,6 @@ def fit_one(
         str(cfg["random_state"]),
         "--device",
         device,
-        "--optimizer",
-        str(cfg.get("optimizer", "adamw")),
         "--input",
         dataset,
         "--output",
@@ -276,7 +241,7 @@ def main() -> None:
         "--grid",
         choices=list(GRIDS),
         default="adamw",
-        help="Which grid set to expand (adamw or muon).",
+        help="Which grid set to expand (adamw or bswd).",
     )
     args = parser.parse_args()
     if args.n_gpus > 0 and not args.device.startswith("cuda"):

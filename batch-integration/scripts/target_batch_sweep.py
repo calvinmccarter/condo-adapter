@@ -63,7 +63,6 @@ def fit_one(
         "--batch-size", "8",
         "--weight-decay", "1e-4",
         "--random-state", "42",
-        "--optimizer", "adamw",
         "--target-batch", target_batch,
         "--input", dataset,
         "--output", str(out_h5),

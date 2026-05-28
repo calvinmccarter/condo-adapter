@@ -31,16 +31,15 @@ class ConDoAdapterMMD:
         batch_size: int = 8,
         learning_rate: float = 1e-3,
         weight_decay: float = 1e-4,
+        wd_on_bias: bool = False,
+        patience: int = 3,
         random_state=42,
         verbose: Union[bool, int] = 1,
         device: Union[str, torch.device] = 'cpu',
-        optimizer: str = 'adamw',
     ):
         transforms = {'location-scale', 'affine'}
         if transform_type not in transforms:
             raise NotImplementedError(f'transform_type {transform_type}')
-        if optimizer not in {'adamw', 'muon'}:
-            raise ValueError(f'optimizer must be adamw or muon; got {optimizer!r}')
         assert bootstrap_fraction <= 1
         self.transform_type = transform_type
         self.use_mice_discrete_confounder = use_mice_discrete_confounder
@@ -52,10 +51,11 @@ class ConDoAdapterMMD:
         self.batch_size = batch_size
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
+        self.wd_on_bias = wd_on_bias
+        self.patience = patience
         self.random_state = random_state
         self.verbose = verbose
         self.device = torch.device(device)
-        self.optimizer = optimizer
         # bootsize = n_test * bootstrap_fraction sampled with replacement
         # each is then given n_imp impute samples
         # so total dataset is of size n_test * n_bootstraps * bootstrap_fraction * n_impute
@@ -170,18 +170,22 @@ class ConDoAdapterMMD:
             transform_type=self.transform_type,
             in_features=ds, out_features=dt, dtype=dataset.dtype())
         model.to(device)
-        if self.optimizer == 'muon':
-            from condo.muon import Muon, make_param_groups
-            optimizer = Muon(
-                make_param_groups(model),
-                lr=self.learning_rate,
-                weight_decay=self.weight_decay,
-            )
-        else:
-            optimizer = torch.optim.AdamW(
-                model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay,
-            )
-        early_stopping = EarlyStopping(patience=3, model=model)
+        # Weight decay is applied to the matrix/scale parameter (model.M)
+        # at self.weight_decay; the bias / location (model.b) is decoupled
+        # via self.wd_on_bias. With LinearAdapter's delta-from-identity init
+        # for square M, WD on M pulls the effective transform toward I; by
+        # default wd_on_bias=False so the location is free to shift to align
+        # batch means without being pulled toward zero. Set wd_on_bias=True
+        # to apply the same WD to both parameters.
+        bias_wd = self.weight_decay if self.wd_on_bias else 0.0
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": [model.M], "weight_decay": self.weight_decay},
+                {"params": [model.b], "weight_decay": bias_wd},
+            ],
+            lr=self.learning_rate,
+        )
+        early_stopping = EarlyStopping(patience=self.patience, model=model)
         loss_fn = BatchMMDLoss()
         n_batches = len(train_loader)
         if self.verbose:

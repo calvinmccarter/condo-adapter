@@ -78,8 +78,9 @@ def fit_and_eval(
         "--mmd-size", str(config.get("mmd_size", 40)),
         "--batch-size", str(config.get("batch_size", 8)),
         "--weight-decay", str(config.get("weight_decay", 1e-4)),
+        *(["--wd-on-bias"] if config.get("wd_on_bias") else []),
+        "--patience", str(config.get("patience", 3)),
         "--random-state", str(config.get("random_state", 42)),
-        "--optimizer", config.get("optimizer", "adamw"),
         "--input", str(dataset),
         "--output", str(out_h5),
     ]
@@ -156,8 +157,12 @@ def main() -> None:
     parser.add_argument("--mmd-size", type=int, default=40)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--wd-on-bias", dest="wd_on_bias",
+                        action="store_true",
+                        help="apply weight_decay to the bias (location) too "
+                             "(default: bias has weight_decay=0)")
+    parser.add_argument("--patience", type=int, default=3)
     parser.add_argument("--random-state", type=int, default=42)
-    parser.add_argument("--optimizer", default="adamw")
     parser.add_argument("--skip-kbet", dest="skip_kbet", action="store_true",
                         help="skip kbet in eval (slow; not in composites)")
     args = parser.parse_args()
@@ -176,8 +181,9 @@ def main() -> None:
         "mmd_size": args.mmd_size,
         "batch_size": args.batch_size,
         "weight_decay": args.weight_decay,
+        "wd_on_bias": args.wd_on_bias,
+        "patience": args.patience,
         "random_state": args.random_state,
-        "optimizer": args.optimizer,
         "skip_kbet": args.skip_kbet,
     }
     (sweep_dir / "config.json").write_text(json.dumps(config, indent=2))

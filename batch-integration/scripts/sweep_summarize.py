@@ -41,9 +41,6 @@ def tag_for(cfg: dict) -> str:
         "_ms{mmd_size}_bs{batch_size}"
         "_wd{weight_decay:.0e}_seed{random_state}"
     ).format(**cfg)
-    opt = cfg.get("optimizer", "adamw")
-    if opt != "adamw":
-        base = base + f"_{opt}"
     return base
 
 
