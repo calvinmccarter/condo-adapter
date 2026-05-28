@@ -51,18 +51,6 @@ def main() -> None:
         help="Optimizer for MMD SGD training. Ignored for divergence=kld.",
     )
     parser.add_argument(
-        "--integrator",
-        choices=["agglomerative", "bestfirst"],
-        default="agglomerative",
-        help="Multi-batch strategy: 'agglomerative' (single growing target, "
-             "static pre-asw seeding) or 'bestfirst' (competitive forest, "
-             "asw recomputed live per agglomeration).",
-    )
-    parser.add_argument(
-        "--asw-subsample", type=int, default=10000,
-        help="Cells sampled to estimate each agglomeration's asw (bestfirst).",
-    )
-    parser.add_argument(
         "--method-dir",
         default=os.environ.get("CONDO_METHOD_DIR"),
         help=(
@@ -121,8 +109,6 @@ def main() -> None:
         "random_state": args.random_state,
         "device": args.device,
         "optimizer": args.optimizer,
-        "integrator": args.integrator,
-        "asw_subsample": args.asw_subsample,
     }
     meta = {"name": name, "resources_dir": str(utils_dir)}
     run_condo(par, meta)

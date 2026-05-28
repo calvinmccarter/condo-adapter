@@ -80,8 +80,6 @@ def fit_and_eval(
         "--weight-decay", str(config.get("weight_decay", 1e-4)),
         "--random-state", str(config.get("random_state", 42)),
         "--optimizer", config.get("optimizer", "adamw"),
-        "--integrator", config.get("integrator", "agglomerative"),
-        "--asw-subsample", str(config.get("asw_subsample", 10000)),
         "--input", str(dataset),
         "--output", str(out_h5),
     ]
@@ -160,10 +158,6 @@ def main() -> None:
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--optimizer", default="adamw")
-    parser.add_argument("--integrator", default="agglomerative",
-                        choices=["agglomerative", "bestfirst"])
-    parser.add_argument("--asw-subsample", dest="asw_subsample", type=int,
-                        default=10000)
     parser.add_argument("--skip-kbet", dest="skip_kbet", action="store_true",
                         help="skip kbet in eval (slow; not in composites)")
     args = parser.parse_args()
@@ -184,8 +178,6 @@ def main() -> None:
         "weight_decay": args.weight_decay,
         "random_state": args.random_state,
         "optimizer": args.optimizer,
-        "integrator": args.integrator,
-        "asw_subsample": args.asw_subsample,
         "skip_kbet": args.skip_kbet,
     }
     (sweep_dir / "config.json").write_text(json.dumps(config, indent=2))
