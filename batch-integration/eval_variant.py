@@ -17,6 +17,7 @@ in src/metrics/*. We replicate:
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import subprocess
@@ -31,6 +32,19 @@ import scanpy as sc
 
 
 _HERE = Path(__file__).resolve().parent
+
+# Resolutions for leiden, matching openproblems clustering_overlap /
+# isolated_label_f1 defaults.
+_RESOLUTIONS = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+
+# Leiden backend: igraph flavor, as openproblems' precompute_clustering_run
+# uses on CPU (`flavor='igraph', n_iterations=2`). leidenalg (scanpy's old
+# default) is orders of magnitude slower at scale and gives a slightly
+# different partition, so igraph is both faster AND more consistent with the
+# published baselines.
+_leiden_igraph = functools.partial(
+    sc.tl.leiden, flavor="igraph", n_iterations=2, directed=False
+)
 _KBET_VENV_PY = Path(
     os.environ.get(
         "CONDO_KBET_PYTHON",
@@ -65,6 +79,23 @@ def _ensure_processed(integrated: ad.AnnData, dataset: ad.AnnData) -> ad.AnnData
     return integrated
 
 
+def _precompute_leiden(adata: ad.AnnData) -> None:
+    """Cluster once per resolution with igraph and store as ``leiden_{res}``
+    columns. scib's cluster_optimal_resolution / isolated_labels_f1 reuse any
+    existing ``{cluster_key}_{res}`` column (they only cluster if it's
+    missing), so this is computed once and shared by both nmi/ari and
+    isolated_label_f1 -- mirroring openproblems' precompute_clustering step
+    and avoiding the ~14 leidenalg runs the old code did at eval time."""
+    t0 = time.time()
+    for res in _RESOLUTIONS:
+        _leiden_igraph(adata, resolution=res, key_added=f"leiden_{res}")
+    print(
+        f">> precomputed leiden (igraph) at {len(_RESOLUTIONS)} resolutions "
+        f"in {time.time() - t0:.0f}s",
+        flush=True,
+    )
+
+
 def _safe(metric_name: str, fn: Callable[[], float]) -> dict[str, Any]:
     t0 = time.time()
     try:
@@ -79,7 +110,12 @@ def _safe(metric_name: str, fn: Callable[[], float]) -> dict[str, Any]:
         }
 
 
-def evaluate(integrated_path: str, dataset_path: str, solution_path: str) -> list[dict]:
+def evaluate(
+    integrated_path: str,
+    dataset_path: str,
+    solution_path: str,
+    skip_kbet: bool = False,
+) -> list[dict]:
     print(">> Read integrated", flush=True)
     integrated = ad.read_h5ad(integrated_path)
     print(">> Read dataset", flush=True)
@@ -159,6 +195,10 @@ def evaluate(integrated_path: str, dataset_path: str, solution_path: str) -> lis
             }
         )
 
+    # Precompute the leiden clustering once (igraph) and share it between
+    # nmi/ari and isolated_label_f1, matching openproblems' precompute step.
+    _precompute_leiden(integrated)
+
     # ----------------------------------------------- clustering_overlap (ari + nmi)
     try:
         from scib.metrics.clustering import cluster_optimal_resolution
@@ -169,8 +209,8 @@ def evaluate(integrated_path: str, dataset_path: str, solution_path: str) -> lis
             adata=adata_clust,
             label_key="cell_type",
             cluster_key="leiden",
-            cluster_function=sc.tl.leiden,
-            resolutions=[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+            cluster_function=_leiden_igraph,
+            resolutions=_RESOLUTIONS,
         )
 
         results.append(
@@ -226,10 +266,10 @@ def evaluate(integrated_path: str, dataset_path: str, solution_path: str) -> lis
                 ),
             )
         )
-        # isolated_labels_f1 needs a clustering column — reuse the leiden
-        # column from cluster_optimal_resolution above.
+        # isolated_labels_f1 re-optimises resolution against its own F1
+        # metric, but reuses the precomputed leiden_{res} columns carried in
+        # on the copy of `integrated` (no new leiden runs).
         adata_clust2 = integrated.copy()
-        adata_clust2.obs["leiden"] = adata_clust.obs["leiden"]
         results.append(
             _safe(
                 "isolated_label_f1",
@@ -238,7 +278,7 @@ def evaluate(integrated_path: str, dataset_path: str, solution_path: str) -> lis
                     label_key="cell_type",
                     batch_key="batch",
                     cluster_key="leiden",
-                    resolutions=[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+                    resolutions=_RESOLUTIONS,
                     embed=None,
                     iso_threshold=iso_thr_override,
                     verbose=False,
@@ -329,9 +369,14 @@ def evaluate(integrated_path: str, dataset_path: str, solution_path: str) -> lis
 
     # ---------------------------------------------------------- kbet
     # Runs in the sibling .venv-kbet (numpy<2, scipy<=1.13, rpy2 3.5.x +
-    # theislab/kBET R package). Skipped if the venv isn't present.
+    # theislab/kBET R package). Skipped if --skip-kbet is set or the venv
+    # isn't present. kbet is the slowest metric (it times out on the large
+    # datasets, where the published baselines also lack it) and is not part
+    # of the all/feature composites.
     try:
-        if not _KBET_VENV_PY.exists():
+        if skip_kbet:
+            results.append({"metric": "kbet", "skipped": True})
+        elif not _KBET_VENV_PY.exists():
             results.append(
                 {"metric": "kbet", "error": f"venv not found at {_KBET_VENV_PY}"}
             )
@@ -461,9 +506,16 @@ def main() -> None:
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--solution", required=True)
     parser.add_argument("--output", required=True, help="path to JSON output")
+    parser.add_argument(
+        "--skip-kbet", action="store_true",
+        help="skip the kbet metric (slow R subprocess; times out on large "
+             "datasets and not used in the all/feature composites).",
+    )
     args = parser.parse_args()
 
-    results = evaluate(args.integrated, args.dataset, args.solution)
+    results = evaluate(
+        args.integrated, args.dataset, args.solution, skip_kbet=args.skip_kbet
+    )
 
     Path(args.output).write_text(json.dumps(results, indent=2))
     print(json.dumps(results, indent=2), flush=True)
