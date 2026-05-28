@@ -39,6 +39,29 @@ import numpy as np
 
 
 @dataclass
+class BestFirstIntegrationResult:
+    """Output of :func:`bestfirst_integrate`.
+
+    Attributes:
+        Y_out: integrated feature matrix, same shape/order as input ``Y``.
+            Cells are replaced by their (possibly repeatedly) ConDo-
+            transformed values; cells that were only ever in an anchor
+            agglomeration are unchanged.
+        merge_order: list of ``(target_batches, source_batches,
+            target_asw, source_asw)`` tuples, one per merge, in order.
+        components: final agglomerations as lists of original batch
+            labels. More than one component => some batches were never
+            type-compatible and stayed in separate frames.
+        n_merges: number of merge steps performed.
+    """
+
+    Y_out: np.ndarray
+    merge_order: List[tuple]
+    components: List[List[Any]]
+    n_merges: int
+
+
+@dataclass
 class AgglomerativeIntegrationResult:
     """Output of :func:`agglomerative_integrate`.
 
@@ -235,4 +258,220 @@ def agglomerative_integrate(
         unreachable=unreachable,
         compatibility=adj,
         batch_score=batch_score,
+    )
+
+
+def _global_pca(features: np.ndarray, n_pcs: int) -> np.ndarray:
+    """Fit a single PCA over *all* cells and return the (n_obs, n_comps)
+    coordinates. Replicates the openproblems ``process_dataset`` X_pca
+    recipe (PCA on the normalized, batch-aware-HVG matrix) applied to the
+    current corrected feature matrix -- the caller is expected to pass that
+    matrix (the benchmark dataset is already subset to batch-aware HVGs)."""
+    from sklearn.decomposition import PCA
+
+    n_comp = min(n_pcs, features.shape[1], features.shape[0] - 1)
+    return PCA(n_components=n_comp, random_state=0).fit_transform(features)
+
+
+def _silhouette_in_coords(
+    coords: np.ndarray,
+    labels: np.ndarray,
+    *,
+    subsample: int,
+    rng: np.random.Generator,
+) -> float:
+    """Uniform-subsample silhouette of ``labels`` on ``coords`` (already a
+    shared embedding). Returns ``-inf`` when undefined for ranking (fewer
+    than two distinct labels, or too few cells)."""
+    from sklearn.metrics import silhouette_score
+
+    labels = np.asarray(labels).reshape(-1)
+    n = coords.shape[0]
+    if n > subsample:
+        idx = rng.choice(n, size=subsample, replace=False)
+        coords = coords[idx]
+        labels = labels[idx]
+
+    uniq = np.unique(labels)
+    # silhouette_score requires 2 <= n_labels <= n_samples - 1.
+    if uniq.shape[0] < 2 or coords.shape[0] <= uniq.shape[0]:
+        return float("-inf")
+    try:
+        return float(silhouette_score(coords, labels))
+    except ValueError:
+        return float("-inf")
+
+
+def bestfirst_integrate(
+    Y: np.ndarray,
+    batches: np.ndarray,
+    confounders: np.ndarray,
+    *,
+    adapter_factory: Callable[[], Any],
+    asw_subsample: int = 10000,
+    n_pcs: int = 50,
+    random_state: int = 0,
+    verbose: bool = True,
+) -> BestFirstIntegrationResult:
+    """Best-first ("competitive forest") agglomerative integration.
+
+    Unlike :func:`agglomerative_integrate`, which grows a single fixed
+    target pool seeded once with a static per-batch score, here *every*
+    current agglomeration competes to be the anchor each round based on
+    its **live** asw (cell-type silhouette), recomputed after every merge:
+
+    1. Start with one agglomeration per batch. Score each by asw.
+    2. Each round, among agglomerations that have at least one
+       type-compatible neighbor (sharing >=1 confounder value), pick the
+       **target** = highest asw. Pick the **source** = highest-asw
+       compatible neighbor of that target.
+    3. Fit a fresh adapter mapping the source's cells onto the target,
+       transform them, and merge into a new agglomeration (cells =
+       target U transformed-source; types = union).
+    4. **Refit a single global PCA** over all cells' current corrected
+       features and recompute **every** agglomeration's asw in that shared
+       basis. (The basis shifts each merge, so all asws change -- and a
+       shared basis is what makes asws comparable across the competing
+       agglomerations.)
+    5. Repeat until no two remaining agglomerations share a cell type
+       (disconnected components stay in separate frames).
+
+    asw is a uniform random subsample (``asw_subsample`` cells) silhouette
+    of the confounder labels, computed in the global ``n_pcs``-component
+    PCA of the current corrected feature matrix. This replicates the
+    openproblems ``process_dataset`` X_pca recipe (PCA on the normalized,
+    batch-aware-HVG matrix) -- the caller passes that matrix (the benchmark
+    dataset is already subset to batch-aware HVGs) -- but refit on the
+    evolving corrected data. Subsampling keeps the repeated O(n^2)
+    silhouette tractable; the PCA itself is fit on all cells.
+
+    Args:
+        Y: (n_obs, n_features) feature matrix (normalized, batch-aware-HVG
+            restricted, to replicate the benchmark's X_pca).
+        batches: (n_obs,) batch labels.
+        confounders: (n_obs,) confounder values (e.g. cell type).
+        adapter_factory: zero-arg callable returning a fresh adapter;
+            each merge calls ``adapter.fit(Ys, Yt, Zs, Zt)`` and
+            ``adapter.transform(Ys)`` with confounders shaped ``(n, 1)``.
+        asw_subsample: max cells used to estimate an agglomeration's asw.
+        n_pcs: components for the global PCA asw embedding.
+        random_state: seed for the subsampling RNG.
+        verbose: print each merge step.
+
+    Returns:
+        :class:`BestFirstIntegrationResult`.
+    """
+    batches_1d = np.asarray(batches).reshape(-1)
+    confounders_1d = np.asarray(confounders).reshape(-1)
+    if Y.shape[0] != batches_1d.shape[0]:
+        raise ValueError(
+            f"Y has {Y.shape[0]} rows but batches has {batches_1d.shape[0]}"
+        )
+    if confounders_1d.shape[0] != batches_1d.shape[0]:
+        raise ValueError("batches and confounders must align row-wise")
+
+    rng = np.random.default_rng(random_state)
+    Y_work = np.array(Y, dtype=float, copy=True)
+    Z_col = confounders_1d.reshape(-1, 1)
+
+    def recompute_all_asw(aggloms: Dict[int, Dict[str, Any]]) -> None:
+        """Refit one global PCA on the current corrected features and set
+        every agglomeration's asw in that shared basis."""
+        coords = _global_pca(Y_work, n_pcs)
+        for a in aggloms.values():
+            a["asw"] = _silhouette_in_coords(
+                coords[a["members"]], confounders_1d[a["members"]],
+                subsample=asw_subsample, rng=rng,
+            )
+
+    # One agglomeration per batch; score all in the initial global PCA.
+    aggloms: Dict[int, Dict[str, Any]] = {}
+    next_id = 0
+    for b in np.unique(batches_1d).tolist():
+        members = np.flatnonzero(batches_1d == b)
+        aggloms[next_id] = {
+            "members": members,
+            "types": set(np.unique(confounders_1d[members]).tolist()),
+            "batches": {b},
+            "asw": float("-inf"),
+        }
+        next_id += 1
+    recompute_all_asw(aggloms)
+
+    if verbose:
+        print(
+            f">> bestfirst: {len(aggloms)} batches; asw = uniform subsample"
+            f"={asw_subsample} silhouette in a global {n_pcs}-PC PCA, "
+            "refit on corrected features every merge",
+            flush=True,
+        )
+
+    merge_order: List[tuple] = []
+
+    while True:
+        ids = list(aggloms)
+
+        def neighbors(i: int) -> List[int]:
+            ti = aggloms[i]["types"]
+            return [j for j in ids if j != i and (ti & aggloms[j]["types"])]
+
+        eligible = [(i, neighbors(i)) for i in ids]
+        eligible = [(i, nb) for i, nb in eligible if nb]
+        if not eligible:
+            break
+
+        target, nbrs = max(eligible, key=lambda x: aggloms[x[0]]["asw"])
+        source = max(nbrs, key=lambda j: aggloms[j]["asw"])
+
+        t, s = aggloms[target], aggloms[source]
+        Yt, Zt = Y_work[t["members"]], Z_col[t["members"]]
+        Ys, Zs = Y_work[s["members"]], Z_col[s["members"]]
+
+        src_asw, tgt_asw = s["asw"], t["asw"]  # scores that drove selection
+
+        adapter = adapter_factory()
+        adapter.fit(Ys, Yt, Zs, Zt)
+        Y_work[s["members"]] = adapter.transform(Ys)
+
+        new = {
+            "members": np.concatenate([t["members"], s["members"]]),
+            "types": t["types"] | s["types"],
+            "batches": t["batches"] | s["batches"],
+            "asw": float("-inf"),
+        }
+        del aggloms[target]
+        del aggloms[source]
+        aggloms[next_id] = new
+        # Refit the global PCA on the updated corrected features and rescore
+        # every agglomeration in the new shared basis.
+        recompute_all_asw(aggloms)
+
+        if verbose:
+            print(
+                f">> merge source={sorted(s['batches'])} "
+                f"(asw={src_asw:.4f}, n={s['members'].size}) "
+                f"-> target={sorted(t['batches'])} "
+                f"(asw={tgt_asw:.4f}, n={t['members'].size}); "
+                f"merged asw={new['asw']:.4f}",
+                flush=True,
+            )
+
+        merge_order.append(
+            (sorted(t["batches"]), sorted(s["batches"]), tgt_asw, src_asw)
+        )
+        next_id += 1
+
+    components = [sorted(a["batches"]) for a in aggloms.values()]
+    if verbose and len(components) > 1:
+        print(
+            f">> {len(components)} disconnected components left in "
+            f"separate frames: {components}",
+            flush=True,
+        )
+
+    return BestFirstIntegrationResult(
+        Y_out=Y_work,
+        merge_order=merge_order,
+        components=components,
+        n_merges=len(merge_order),
     )

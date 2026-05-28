@@ -3,7 +3,9 @@ from .adapter_wd import AdapterWD
 from .adapter_gaussian_ot import AdapterGaussianOT
 from .batch_integration import (
     AgglomerativeIntegrationResult,
+    BestFirstIntegrationResult,
     agglomerative_integrate,
+    bestfirst_integrate,
     build_compatibility_graph,
 )
 from .condo_adapter_kld import ConDoAdapterKLD

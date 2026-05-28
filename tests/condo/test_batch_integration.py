@@ -215,3 +215,98 @@ def test_agglomerative_validates_shapes_and_scores():
             Y, batches, cts,
             batch_score={"A": 1.0}, adapter_factory=lambda: None, verbose=False,
         )
+
+
+# --------------------------------------------------------------------------
+# bestfirst_integrate (competitive forest, live recomputed asw)
+# --------------------------------------------------------------------------
+from condo import bestfirst_integrate  # noqa: E402
+
+
+def _three_batches_shifted(rng):
+    """A, B, C each have well-separated cell types x and y, with distinct
+    additive per-batch shifts. All three share {x, y}, so all compatible."""
+    mu_x = np.array([0.0, 0.0])
+    mu_y = np.array([6.0, 6.0])
+    sigma = np.array([0.3, 0.3])
+    specs = {
+        "A": {"x": (mu_x, sigma, np.array([0.0, 0.0])),
+              "y": (mu_y, sigma, np.array([0.0, 0.0]))},
+        "B": {"x": (mu_x, sigma, np.array([3.0, -2.0])),
+              "y": (mu_y, sigma, np.array([3.0, -2.0]))},
+        "C": {"x": (mu_x, sigma, np.array([-2.0, 4.0])),
+              "y": (mu_y, sigma, np.array([-2.0, 4.0]))},
+    }
+    return _make_dataset(rng, specs, n_per_celltype=120)
+
+
+def test_bestfirst_merges_all_compatible_into_one_component():
+    rng = np.random.RandomState(0)
+    Y, batches, cts = _three_batches_shifted(rng)
+    res = bestfirst_integrate(
+        Y, batches, cts,
+        adapter_factory=lambda: ConDoAdapterKLD(transform_type="location-scale",
+                                                verbose=0),
+        verbose=False,
+    )
+    # All three share cell types -> a single final component, two merges.
+    assert res.n_merges == 2
+    assert len(res.components) == 1
+    assert sorted(res.components[0]) == ["A", "B", "C"]
+
+
+def test_bestfirst_shrinks_cross_batch_centroid_distance():
+    rng = np.random.RandomState(1)
+    Y, batches, cts = _three_batches_shifted(rng)
+    res = bestfirst_integrate(
+        Y, batches, cts,
+        adapter_factory=lambda: ConDoAdapterKLD(transform_type="location-scale",
+                                                verbose=0),
+        verbose=False,
+    )
+
+    def cen(arr, b, ct):
+        m = (batches == b) & (cts == ct)
+        return arr[m].mean(axis=0)
+
+    for ct in ("x", "y"):
+        pre = np.linalg.norm(cen(Y, "B", ct) - cen(Y, "C", ct))
+        post = np.linalg.norm(cen(res.Y_out, "B", ct) - cen(res.Y_out, "C", ct))
+        assert post < 0.5 * pre, (
+            f"{ct}: B↔C centroid gap should shrink; pre={pre:.2f} post={post:.2f}"
+        )
+
+
+def test_bestfirst_leaves_incompatible_batch_separate():
+    rng = np.random.RandomState(2)
+    Y, batches, cts = _three_batches_shifted(rng)
+    # Add a 4th batch D whose only cell type 'q' is shared with nobody.
+    mu_q = np.array([20.0, 20.0])
+    sigma = np.array([0.3, 0.3])
+    Yd = rng.normal(mu_q, sigma, size=(80, 2)).astype(np.float32)
+    Y = np.vstack([Y, Yd])
+    batches = np.concatenate([batches, np.array(["D"] * 80, dtype="U")])
+    cts = np.concatenate([cts, np.array(["q"] * 80, dtype="U")])
+
+    res = bestfirst_integrate(
+        Y, batches, cts,
+        adapter_factory=lambda: ConDoAdapterKLD(transform_type="location-scale",
+                                                verbose=0),
+        verbose=False,
+    )
+    comps = sorted(res.components, key=len)
+    assert comps[0] == ["D"]                      # D isolated
+    assert sorted(comps[-1]) == ["A", "B", "C"]   # the rest merged
+    # D's cells must be untouched (never a source or anchored-onto).
+    d_mask = batches == "D"
+    assert np.allclose(res.Y_out[d_mask], Y[d_mask])
+
+
+def test_bestfirst_validates_shapes():
+    Y = np.zeros((10, 3))
+    batches = np.array(["A"] * 10, dtype="U")
+    cts = np.array(["x"] * 9, dtype="U")  # wrong length
+    with pytest.raises(ValueError):
+        bestfirst_integrate(
+            Y, batches, cts, adapter_factory=lambda: None, verbose=False,
+        )
