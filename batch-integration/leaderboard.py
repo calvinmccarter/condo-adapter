@@ -67,6 +67,7 @@ BASELINES_YAML = REPO / "work" / "fullbench" / "baselines" / "score_uns.yaml"
 
 DEFAULT_DATASETS = [
     "dkd", "gtex_v9", "hypomap", "immune_cell_atlas", "mouse_pancreas_atlas",
+    "tabula_sapiens",
 ]
 
 # Which pool each metric belongs to, for the 0.6*bio + 0.4*batch composite.
