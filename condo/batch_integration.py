@@ -220,6 +220,17 @@ def agglomerative_integrate(
         Y_out[src_mask] = adapter.transform(Ys)
         target_set.add(next_source)
         merge_order.append(next_source)
+        if verbose:
+            be = getattr(adapter, "best_epoch_", None)
+            le = getattr(adapter, "last_epoch_", None)
+            bl = getattr(adapter, "best_loss_", None)
+            if be is not None and le is not None:
+                # le is 0-indexed; +1 to read as "epoch counts".
+                print(
+                    f"   training: best_epoch={be + 1}, last_epoch={le + 1}"
+                    + (f", best_loss={bl:.5f}" if bl is not None else ""),
+                    flush=True,
+                )
 
     unreachable = [b for b in unique_batches if b not in target_set]
     if verbose and unreachable:

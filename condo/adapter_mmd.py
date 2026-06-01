@@ -63,6 +63,9 @@ class AdapterMMD:
         n = min(Xs.shape[0], Xt.shape[0])
 
         rng = skut.check_random_state(self.random_state)
+        torch.manual_seed(self.random_state)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.random_state)
         bootsize = max(1, int(n * self.bootstrap_fraction))
         if self.n_bootstraps is None:
             n_bootstraps = int(np.ceil(self.batch_size / bootsize))
@@ -125,6 +128,9 @@ class AdapterMMD:
             if early_stopping.early_stop:
                 break
 
+        self.best_epoch_ = early_stopping.epoch_min
+        self.last_epoch_ = epoch
+        self.best_loss_ = early_stopping.loss_min
         model.load_state_dict(early_stopping.state_dict)
         (M, b) = model.get_M_b()
         (M, b) = (M.astype(Xs.dtype), b.astype(Xs.dtype))
