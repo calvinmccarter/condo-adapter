@@ -264,6 +264,124 @@ def run_profile(name, profile, bl, methods, results_dir, datasets, condo_label,
             print(f"  {ds:22s} rank {r}/{n}   composite={c:.4f}")
 
 
+def aggregate_across_datasets(
+    bl, methods, results_dir, datasets, condo_label,
+    real_only=True, profile_names=None,
+):
+    """For each profile, summarise per-method performance across the given
+    datasets, restricted to methods scoreable (finite composite) on *all*
+    datasets. For composite/bio/batch, prints:
+      - avg rank within the full-coverage pool, per dataset, averaged
+      - improvability = mean over datasets of (best_score - this_score) * 100,
+        where best_score is the top of the full-coverage pool for that
+        dataset+kind. Lower is better; 0 means this method is the top on
+        every dataset for that kind.
+    """
+    kinds = ("composite", "bio", "batch")
+    if profile_names is None:
+        profile_names = list(PROFILES)
+
+    for pname in profile_names:
+        prof = PROFILES[pname]
+        feature = prof["roster"] == "feature"
+        roster = [me for me in methods
+                  if (not feature or is_feature_method(bl, me, datasets))]
+        if real_only:
+            roster_display = [me for me in roster if me not in CONTROLS]
+        else:
+            roster_display = roster
+
+        # scores[method][dataset][kind] = scaled value (or None)
+        method_names = list(roster_display) + [condo_label]
+        scores = {m: {} for m in method_names}
+
+        for ds in datasets:
+            S = (derive_set(bl, results_dir, ds)
+                 if prof["metrics"] == "per_dataset" else prof["metrics"])
+            condo_scores = load_condo(results_dir, ds)
+            # full scaling pool (incl. controls as anchors) + condo
+            pool = [bl[(me, ds)] for me in roster] + [condo_scores]
+            mm = metric_minmax(pool, S)
+            for me in roster_display:
+                scores[me][ds] = {
+                    k: composite(bl[(me, ds)], S, mm, k) for k in kinds
+                }
+            scores[condo_label][ds] = {
+                k: composite(condo_scores, S, mm, k) for k in kinds
+            }
+
+        # Methods with finite composite on every dataset.
+        full = [m for m in method_names
+                if all(scores[m].get(ds, {}).get("composite") is not None
+                       for ds in datasets)]
+        if not full:
+            print(f"\n  [{pname}] no methods with full coverage across "
+                  f"{len(datasets)} datasets")
+            continue
+
+        # Per-(dataset, kind) best score among full-coverage pool.
+        best = {ds: {k: max(scores[m][ds][k] for m in full
+                            if scores[m][ds][k] is not None)
+                     for k in kinds}
+                for ds in datasets}
+
+        # Per-method, per-kind: ranks (within full pool) and improvability.
+        agg = []
+        for m in full:
+            row = {"method": m}
+            for k in kinds:
+                vals = sorted(
+                    [(mm_, scores[mm_][ds][k]) for ds in datasets
+                     for mm_ in full],
+                    key=lambda x: x[0],
+                )
+                # rank per dataset within full pool
+                ranks_per_ds = []
+                gaps_per_ds = []
+                for ds in datasets:
+                    rows = sorted(
+                        [(mm_, scores[mm_][ds][k]) for mm_ in full
+                         if scores[mm_][ds][k] is not None],
+                        key=lambda x: -x[1],
+                    )
+                    rk = next((i for i, (mm_, _) in enumerate(rows, 1)
+                               if mm_ == m), None)
+                    if rk is not None:
+                        ranks_per_ds.append(rk)
+                    if (scores[m][ds][k] is not None
+                            and best[ds][k] is not None):
+                        gaps_per_ds.append(best[ds][k] - scores[m][ds][k])
+                row[f"rank_{k}"] = (sum(ranks_per_ds) / len(ranks_per_ds)
+                                    if ranks_per_ds else float("nan"))
+                row[f"imp_{k}"] = (sum(gaps_per_ds) / len(gaps_per_ds) * 100
+                                   if gaps_per_ds else float("nan"))
+            agg.append(row)
+
+        agg.sort(key=lambda r: r["rank_composite"])
+
+        print(f"\n{'#' * 80}")
+        print(f"# Cross-dataset summary ({pname}) over {len(datasets)} "
+              f"datasets — {len(full)} methods with full coverage")
+        print("#   rk_X  = mean rank within the full-coverage pool on metric X")
+        print("#   imp_X = mean (best_score - this_score) * 100 on metric X "
+              "(0 = always top; lower = better)")
+        print(f"{'#' * 80}")
+        header = (f"  {'method':28s}  "
+                  f"{'rk_cmp':>6} {'imp_cmp':>7}   "
+                  f"{'rk_bio':>6} {'imp_bio':>7}   "
+                  f"{'rk_bat':>6} {'imp_bat':>7}")
+        print(header)
+        for row in agg:
+            mark = " <==" if row["method"] == condo_label else ""
+            print(
+                f"  {row['method']:28s}  "
+                f"{row['rank_composite']:>6.2f} {row['imp_composite']:>7.2f}   "
+                f"{row['rank_bio']:>6.2f} {row['imp_bio']:>7.2f}   "
+                f"{row['rank_batch']:>6.2f} {row['imp_batch']:>7.2f}"
+                f"{mark}"
+            )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--results-dir", required=True,
@@ -280,6 +398,8 @@ def main() -> None:
                     default="composite",
                     help="rank by full composite (default), bio only, "
                          "or batch only")
+    ap.add_argument("--no-aggregate", dest="aggregate", action="store_false",
+                    help="skip the cross-dataset summary block")
     args = ap.parse_args()
 
     bl, methods = load_baselines(BASELINES_YAML)
@@ -290,6 +410,13 @@ def main() -> None:
         run_profile(name, PROFILES[name], bl, methods, results_dir,
                     args.datasets, args.condo_label,
                     real_only=not args.include_controls, kind=args.score)
+
+    if args.aggregate:
+        aggregate_across_datasets(
+            bl, methods, results_dir, args.datasets, args.condo_label,
+            real_only=not args.include_controls,
+            profile_names=profiles,
+        )
 
 
 if __name__ == "__main__":
