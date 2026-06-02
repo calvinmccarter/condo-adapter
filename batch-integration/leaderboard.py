@@ -136,6 +136,33 @@ def load_baselines(path: Path):
     return bl, methods
 
 
+def inject_local_results(bl, methods, injections):
+    """Override or add per-(method, dataset) entries with locally-computed
+    result JSONs. Each injection is "method:dataset:path" -> the result JSON
+    at `path` is loaded and replaces bl[(method, dataset)] entirely. Adds
+    `method` to the methods list if it wasn't already present.
+
+    Used to patch in metrics that are missing from the published baselines
+    (e.g. scvi/scanvi on tabula_sapiens, which lack isolated_label_asw)."""
+    for spec in injections:
+        parts = spec.split(":", 2)
+        if len(parts) != 3:
+            raise ValueError(
+                f"--inject expects 'method:dataset:path', got {spec!r}"
+            )
+        method, dataset, path = parts
+        rows = json.loads(Path(path).read_text())
+        sc = {r["metric"]: r["score"] for r in rows
+              if "score" in r and r["score"] is not None}
+        bl[(method, dataset)] = sc
+        if method not in methods:
+            methods.append(method)
+            methods.sort()
+        print(f"[inject] {method} on {dataset}: {len(sc)} metrics from {path}",
+              flush=True)
+    return bl, methods
+
+
 def load_condo(results_dir: Path, ds: str) -> dict:
     p = results_dir / f"{ds}.json"
     if not p.exists():
@@ -400,9 +427,17 @@ def main() -> None:
                          "or batch only")
     ap.add_argument("--no-aggregate", dest="aggregate", action="store_false",
                     help="skip the cross-dataset summary block")
+    ap.add_argument("--inject", action="append", default=[],
+                    metavar="METHOD:DATASET:JSON_PATH",
+                    help="override the baseline entry for (method, dataset) "
+                         "with metrics from a local result JSON. Repeatable. "
+                         "Useful for filling gaps in the published baselines "
+                         "(e.g. scvi/scanvi on tabula_sapiens).")
     args = ap.parse_args()
 
     bl, methods = load_baselines(BASELINES_YAML)
+    if args.inject:
+        bl, methods = inject_local_results(bl, methods, args.inject)
     results_dir = Path(args.results_dir)
 
     profiles = list(PROFILES) if args.profile == "both" else [args.profile]
