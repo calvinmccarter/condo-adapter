@@ -80,6 +80,7 @@ def fit_and_eval(
         "--weight-decay", str(config.get("weight_decay", 1e-4)),
         *(["--wd-on-bias"] if config.get("wd_on_bias") else []),
         "--patience", str(config.get("patience", 3)),
+        "--dplr-rank", str(config.get("dplr_rank", 16)),
         "--random-state", str(config.get("random_state", 42)),
         "--input", str(dataset),
         "--output", str(out_h5),
@@ -150,7 +151,10 @@ def main() -> None:
     )
     # MMD-affine config; defaults match the AdamW pull_to_identity winner.
     parser.add_argument("--divergence", default="mmd")
-    parser.add_argument("--transform-type", dest="transform_type", default="affine")
+    parser.add_argument("--transform-type", dest="transform_type", default="affine",
+                        choices=["location-scale", "affine", "diagonal-plus-low-rank"])
+    parser.add_argument("--dplr-rank", dest="dplr_rank", type=int, default=16,
+                        help="rank for diagonal-plus-low-rank transform")
     parser.add_argument("--rep", default="features")
     parser.add_argument("--n-epochs", type=int, default=5)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
@@ -183,6 +187,7 @@ def main() -> None:
         "weight_decay": args.weight_decay,
         "wd_on_bias": args.wd_on_bias,
         "patience": args.patience,
+        "dplr_rank": args.dplr_rank,
         "random_state": args.random_state,
         "skip_kbet": args.skip_kbet,
     }

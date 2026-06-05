@@ -158,6 +158,7 @@ class LinearAdapter(torch.nn.Module):
         transform_type: str,
         in_features: int,
         out_features: int,
+        rank: int = 16,
         device=None,
         dtype=None,
     ) -> None:
@@ -166,6 +167,7 @@ class LinearAdapter(torch.nn.Module):
         self.transform_type = transform_type
         self.in_features = in_features
         self.out_features = out_features
+        self.rank = rank
         # Delta-from-identity parameterization is used iff the transform is
         # square (always so for location-scale). Recorded once so
         # forward / get_M_b can branch cheaply.
@@ -182,6 +184,21 @@ class LinearAdapter(torch.nn.Module):
                 torch.empty((out_features, in_features), **factory_kwargs)
             )
             self.b = torch.nn.Parameter(torch.empty(out_features, **factory_kwargs))
+
+        elif transform_type == "diagonal-plus-low-rank":
+            assert in_features == out_features, (
+                "diagonal-plus-low-rank requires square (in_features == out_features)"
+            )
+            num_feats = in_features
+            # M holds the diagonal delta-from-identity: effective d = 1 + ΔM.
+            self.M = torch.nn.Parameter(torch.empty(num_feats, **factory_kwargs))
+            self.U = torch.nn.Parameter(
+                torch.empty(num_feats, rank, **factory_kwargs)
+            )
+            self.V = torch.nn.Parameter(
+                torch.empty(num_feats, rank, **factory_kwargs)
+            )
+            self.b = torch.nn.Parameter(torch.empty(num_feats, **factory_kwargs))
         else:
             raise ValueError(f"invalid transform_type:{transform_type}")
         self.reset_parameters()
@@ -189,8 +206,13 @@ class LinearAdapter(torch.nn.Module):
     def reset_parameters(self) -> None:
         # b always starts at zero (identity translation).
         torch.nn.init.zeros_(self.b)
-        if self.is_square:
-            # M holds a delta from identity; initial delta is zero.
+        if self.transform_type == "diagonal-plus-low-rank":
+            torch.nn.init.zeros_(self.M)
+            # Small symmetric random init for U, V breaks the saddle at
+            # U=V=0 while keeping initial UV^T tiny (~sqrt(rank)*1e-3 per entry).
+            torch.nn.init.normal_(self.U, mean=0.0, std=1e-3)
+            torch.nn.init.normal_(self.V, mean=0.0, std=1e-3)
+        elif self.is_square:
             torch.nn.init.zeros_(self.M)
         else:
             # Non-square affine: legacy eye_ init, regularizes toward zero.
@@ -211,6 +233,14 @@ class LinearAdapter(torch.nn.Module):
                 adaptedSsample = S_ + S_ @ self.M.T + self.b.reshape(1, -1)
             else:
                 adaptedSsample = S_ @ self.M.T + self.b.reshape(1, -1)
+        elif self.transform_type == "diagonal-plus-low-rank":
+            # y = S * (1 + ΔM) + (S @ V) @ U^T + b. Never materializes the
+            # dense d×d matrix; cost is O(N d r) instead of O(N d^2).
+            adaptedSsample = (
+                S_ * (1.0 + self.M).reshape(1, -1)
+                + (S_ @ self.V) @ self.U.T
+                + self.b.reshape(1, -1)
+            )
         adaptedSsample = adaptedSsample.reshape(batch_size, n_mice_impute, -1)
         return adaptedSsample
 
@@ -224,11 +254,38 @@ class LinearAdapter(torch.nn.Module):
             self.is_square,
         )
 
+    def perturbation_sq(self):
+        """Return ||diag(ΔM) + U V^T||²_F as a scalar tensor.
+
+        Equals the squared Frobenius norm of the effective matrix's
+        deviation from identity. Used as the explicit regularizer for the
+        diagonal-plus-low-rank transform (replaces AdamW weight decay on
+        the individual factors). Uses the r×r-trace identity to avoid
+        materializing the dense d×d perturbation:
+            ||UV^T||²_F = trace(U^T U V^T V) = sum(elementwise(U^T U, V^T V))
+            trace(diag(ΔM) UV^T) = sum_i ΔM_i <U_i, V_i>
+        """
+        assert self.transform_type == "diagonal-plus-low-rank"
+        diag_sq = (self.M ** 2).sum()
+        UTU = self.U.T @ self.U
+        VTV = self.V.T @ self.V
+        prod_sq = (UTU * VTV).sum()
+        cross = (self.M * (self.U * self.V).sum(dim=-1)).sum()
+        return diag_sq + prod_sq + 2 * cross
+
     def get_M_b(self):
         # `.cpu()` is a no-op when the tensor is already on CPU, so this
         # path is safe regardless of where the module lives.
-        best_M = self.M.detach().cpu().numpy()
         best_b = self.b.detach().cpu().numpy()
+        if self.transform_type == "diagonal-plus-low-rank":
+            # Materialize the dense effective matrix diag(1 + ΔM) + U V^T
+            # so downstream callers can treat it as a square affine M.
+            delta_d = self.M.detach().cpu().numpy()
+            U = self.U.detach().cpu().numpy()
+            V = self.V.detach().cpu().numpy()
+            best_M = np.diag(1.0 + delta_d) + U @ V.T
+            return (best_M, best_b)
+        best_M = self.M.detach().cpu().numpy()
         if self.is_square:
             # Recover the effective transform that downstream numpy code
             # (transform / inverse_transform) expects.

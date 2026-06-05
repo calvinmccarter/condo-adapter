@@ -33,15 +33,17 @@ class ConDoAdapterMMD:
         weight_decay: float = 1e-4,
         wd_on_bias: bool = False,
         patience: int = 3,
+        dplr_rank: int = 16,
         random_state=42,
         verbose: Union[bool, int] = 1,
         device: Union[str, torch.device] = 'cpu',
     ):
-        transforms = {'location-scale', 'affine'}
+        transforms = {'location-scale', 'affine', 'diagonal-plus-low-rank'}
         if transform_type not in transforms:
             raise NotImplementedError(f'transform_type {transform_type}')
         assert bootstrap_fraction <= 1
         self.transform_type = transform_type
+        self.dplr_rank = dplr_rank
         self.use_mice_discrete_confounder = use_mice_discrete_confounder
         self.mmd_size = mmd_size
         self.n_mice_iters = n_mice_iters
@@ -171,23 +173,42 @@ class ConDoAdapterMMD:
         device = self.device
         model = LinearAdapter(
             transform_type=self.transform_type,
-            in_features=ds, out_features=dt, dtype=dataset.dtype())
+            in_features=ds, out_features=dt,
+            rank=self.dplr_rank,
+            dtype=dataset.dtype())
         model.to(device)
-        # Weight decay is applied to the matrix/scale parameter (model.M)
-        # at self.weight_decay; the bias / location (model.b) is decoupled
-        # via self.wd_on_bias. With LinearAdapter's delta-from-identity init
-        # for square M, WD on M pulls the effective transform toward I; by
-        # default wd_on_bias=False so the location is free to shift to align
-        # batch means without being pulled toward zero. Set wd_on_bias=True
-        # to apply the same WD to both parameters.
-        bias_wd = self.weight_decay if self.wd_on_bias else 0.0
-        optimizer = torch.optim.AdamW(
-            [
-                {"params": [model.M], "weight_decay": self.weight_decay},
-                {"params": [model.b], "weight_decay": bias_wd},
-            ],
-            lr=self.learning_rate,
-        )
+        if self.transform_type == "diagonal-plus-low-rank":
+            # Regularization is the explicit loss term
+            #     self.weight_decay * ||diag(ΔM) + U V^T||²_F
+            # added inside the training loop. AdamW's built-in WD is zeroed
+            # for M/U/V so the optimizer doesn't double up on it. b gets the
+            # usual AdamW WD only if wd_on_bias is set, matching affine.
+            bias_wd = self.weight_decay if self.wd_on_bias else 0.0
+            optimizer = torch.optim.AdamW(
+                [
+                    {"params": [model.M], "weight_decay": 0.0},
+                    {"params": [model.U], "weight_decay": 0.0},
+                    {"params": [model.V], "weight_decay": 0.0},
+                    {"params": [model.b], "weight_decay": bias_wd},
+                ],
+                lr=self.learning_rate,
+            )
+        else:
+            # Weight decay is applied to the matrix/scale parameter (model.M)
+            # at self.weight_decay; the bias / location (model.b) is decoupled
+            # via self.wd_on_bias. With LinearAdapter's delta-from-identity init
+            # for square M, WD on M pulls the effective transform toward I; by
+            # default wd_on_bias=False so the location is free to shift to align
+            # batch means without being pulled toward zero. Set wd_on_bias=True
+            # to apply the same WD to both parameters.
+            bias_wd = self.weight_decay if self.wd_on_bias else 0.0
+            optimizer = torch.optim.AdamW(
+                [
+                    {"params": [model.M], "weight_decay": self.weight_decay},
+                    {"params": [model.b], "weight_decay": bias_wd},
+                ],
+                lr=self.learning_rate,
+            )
         early_stopping = EarlyStopping(patience=self.patience, model=model)
         loss_fn = BatchMMDLoss()
         n_batches = len(train_loader)
@@ -212,6 +233,8 @@ class ConDoAdapterMMD:
                 optimizer.zero_grad()
                 adaptedSsample = model(Ssample)
                 loss = loss_fn(adaptedSsample, Tsample)
+                if self.transform_type == "diagonal-plus-low-rank" and self.weight_decay > 0:
+                    loss = loss + self.weight_decay * model.perturbation_sq()
                 loss.backward()
                 optimizer.step()
 
@@ -237,7 +260,7 @@ class ConDoAdapterMMD:
         if self.transform_type == 'location-scale':
             self.m_ = M
             self.m_inv_ = 1 / self.m_
-        elif self.transform_type == 'affine':
+        elif self.transform_type in ('affine', 'diagonal-plus-low-rank'):
             self.M_ = M
             if M.shape[0] == M.shape[1]:
                 self.M_inv_ = np.linalg.inv(self.M_)
@@ -249,7 +272,7 @@ class ConDoAdapterMMD:
     ):
         if self.transform_type == 'location-scale':
             adaptedS = Xs * self.m_.reshape(1, -1) + self.b_.reshape(1, -1)
-        elif self.transform_type == 'affine':
+        elif self.transform_type in ('affine', 'diagonal-plus-low-rank'):
             adaptedS = Xs @ self.M_.T + self.b_.reshape(1, -1)
         return adaptedS
 
@@ -259,6 +282,6 @@ class ConDoAdapterMMD:
     ):
         if self.transform_type == 'location-scale':
             adaptedT = (Xt - self.b_.reshape(1, -1)) * self.m_inv_.reshape(1, -1)
-        elif self.transform_type == 'affine':
+        elif self.transform_type in ('affine', 'diagonal-plus-low-rank'):
             adaptedT = (Xt - self.b_.reshape(1, -1)) @ self.M_inv_.T
         return adaptedT

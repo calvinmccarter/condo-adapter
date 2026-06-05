@@ -25,8 +25,12 @@ def main() -> None:
     parser.add_argument(
         "--transform-type",
         dest="transform_type",
-        choices=["location-scale", "affine"],
+        choices=["location-scale", "affine", "diagonal-plus-low-rank"],
         required=True,
+    )
+    parser.add_argument(
+        "--dplr-rank", dest="dplr_rank", type=int, default=16,
+        help="rank of the low-rank perturbation in diagonal-plus-low-rank",
     )
     parser.add_argument(
         "--rep", choices=["features", "pca"], default="features"
@@ -108,6 +112,7 @@ def main() -> None:
         "weight_decay": args.weight_decay,
         "wd_on_bias": args.wd_on_bias,
         "patience": args.patience,
+        "dplr_rank": args.dplr_rank,
         "random_state": args.random_state,
         "device": args.device,
     }
