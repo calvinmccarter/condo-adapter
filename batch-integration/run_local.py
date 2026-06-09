@@ -37,11 +37,13 @@ def main() -> None:
     )
     parser.add_argument("--hvg-only", dest="hvg_only", action="store_true")
     parser.add_argument("--bootstrap-fraction", type=float, default=1.0)
-    parser.add_argument("--n-epochs", type=int, default=5)
+    parser.add_argument("--n-epochs", default="auto",
+                        help="integer or 'auto' (transform-specific default)")
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--mmd-size", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--weight-decay", default="auto",
+                        help="float or 'auto' (transform-specific default)")
     parser.add_argument("--wd-on-bias", dest="wd_on_bias",
                         action="store_true",
                         help="apply --weight-decay to the bias (location) "

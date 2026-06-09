@@ -73,11 +73,11 @@ def fit_and_eval(
         "--device", "cuda",
         "--method-dir", str(method_dir),
         "--utils-dir", str(utils_dir),
-        "--n-epochs", str(config.get("n_epochs", 5)),
+        "--n-epochs", str(config.get("n_epochs", "auto")),
         "--learning-rate", str(config.get("learning_rate", 1e-3)),
         "--mmd-size", str(config.get("mmd_size", 40)),
         "--batch-size", str(config.get("batch_size", 8)),
-        "--weight-decay", str(config.get("weight_decay", 1e-4)),
+        "--weight-decay", str(config.get("weight_decay", "auto")),
         *(["--wd-on-bias"] if config.get("wd_on_bias") else []),
         "--patience", str(config.get("patience", 3)),
         "--dplr-rank", str(config.get("dplr_rank", 16)),
@@ -156,11 +156,13 @@ def main() -> None:
     parser.add_argument("--dplr-rank", dest="dplr_rank", type=int, default=16,
                         help="rank for diagonal-plus-low-rank transform")
     parser.add_argument("--rep", default="features")
-    parser.add_argument("--n-epochs", type=int, default=5)
+    parser.add_argument("--n-epochs", default="auto",
+                        help="integer or 'auto' (transform-specific default)")
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--mmd-size", type=int, default=40)
     parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--weight-decay", default="auto",
+                        help="float or 'auto' (transform-specific default)")
     parser.add_argument("--wd-on-bias", dest="wd_on_bias",
                         action="store_true",
                         help="apply weight_decay to the bias (location) too "
