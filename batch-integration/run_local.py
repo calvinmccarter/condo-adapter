@@ -45,9 +45,9 @@ def main() -> None:
     parser.add_argument("--weight-decay", default="auto",
                         help="float or 'auto' (transform-specific default)")
     parser.add_argument("--wd-on-bias", dest="wd_on_bias",
-                        action="store_true",
+                        default=True, action=argparse.BooleanOptionalAction,
                         help="apply --weight-decay to the bias (location) "
-                             "parameter too (default: bias has weight_decay=0)")
+                             "parameter too (default: on; use --no-wd-on-bias to disable)")
     parser.add_argument("--patience", type=int, default=3,
                         help="early-stopping patience for the MMD training")
     parser.add_argument("--random-state", type=int, default=42)
