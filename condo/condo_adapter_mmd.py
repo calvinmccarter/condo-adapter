@@ -31,7 +31,6 @@ class ConDoAdapterMMD:
         batch_size: int = 8,
         learning_rate: float = 1e-3,
         weight_decay: float = 1e-4,
-        wd_on_bias: bool = False,
         patience: int = 3,
         dplr_rank: int = 16,
         random_state=42,
@@ -53,7 +52,6 @@ class ConDoAdapterMMD:
         self.batch_size = batch_size
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
-        self.wd_on_bias = wd_on_bias
         self.patience = patience
         self.random_state = random_state
         self.verbose = verbose
@@ -178,36 +176,25 @@ class ConDoAdapterMMD:
             dtype=dataset.dtype())
         model.to(device)
         if self.transform_type == "diagonal-plus-low-rank":
-            # Regularization is the explicit loss term
+            # Regularization for DPLR is the explicit loss term
             #     self.weight_decay * ||diag(ΔM) + U V^T||²_F
             # added inside the training loop. AdamW's built-in WD is zeroed
             # for M/U/V so the optimizer doesn't double up on it. b gets the
-            # usual AdamW WD only if wd_on_bias is set, matching affine.
-            bias_wd = self.weight_decay if self.wd_on_bias else 0.0
+            # standard AdamW WD.
             optimizer = torch.optim.AdamW(
                 [
                     {"params": [model.M], "weight_decay": 0.0},
                     {"params": [model.U], "weight_decay": 0.0},
                     {"params": [model.V], "weight_decay": 0.0},
-                    {"params": [model.b], "weight_decay": bias_wd},
+                    {"params": [model.b], "weight_decay": self.weight_decay},
                 ],
                 lr=self.learning_rate,
             )
         else:
-            # Weight decay is applied to the matrix/scale parameter (model.M)
-            # at self.weight_decay; the bias / location (model.b) is decoupled
-            # via self.wd_on_bias. With LinearAdapter's delta-from-identity init
-            # for square M, WD on M pulls the effective transform toward I; by
-            # default wd_on_bias=False so the location is free to shift to align
-            # batch means without being pulled toward zero. Set wd_on_bias=True
-            # to apply the same WD to both parameters.
-            bias_wd = self.weight_decay if self.wd_on_bias else 0.0
             optimizer = torch.optim.AdamW(
-                [
-                    {"params": [model.M], "weight_decay": self.weight_decay},
-                    {"params": [model.b], "weight_decay": bias_wd},
-                ],
+                model.parameters(),
                 lr=self.learning_rate,
+                weight_decay=self.weight_decay,
             )
         early_stopping = EarlyStopping(patience=self.patience, model=model)
         loss_fn = BatchMMDLoss()

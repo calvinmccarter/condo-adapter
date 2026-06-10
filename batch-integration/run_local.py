@@ -44,10 +44,6 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--weight-decay", default="auto",
                         help="float or 'auto' (transform-specific default)")
-    parser.add_argument("--wd-on-bias", dest="wd_on_bias",
-                        default=True, action=argparse.BooleanOptionalAction,
-                        help="apply --weight-decay to the bias (location) "
-                             "parameter too (default: on; use --no-wd-on-bias to disable)")
     parser.add_argument("--patience", type=int, default=3,
                         help="early-stopping patience for the MMD training")
     parser.add_argument("--random-state", type=int, default=42)
@@ -112,7 +108,6 @@ def main() -> None:
         "mmd_size": args.mmd_size,
         "batch_size": args.batch_size,
         "weight_decay": args.weight_decay,
-        "wd_on_bias": args.wd_on_bias,
         "patience": args.patience,
         "dplr_rank": args.dplr_rank,
         "random_state": args.random_state,

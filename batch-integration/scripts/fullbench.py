@@ -78,7 +78,6 @@ def fit_and_eval(
         "--mmd-size", str(config.get("mmd_size", 40)),
         "--batch-size", str(config.get("batch_size", 8)),
         "--weight-decay", str(config.get("weight_decay", "auto")),
-        *(["--wd-on-bias"] if config.get("wd_on_bias", True) else ["--no-wd-on-bias"]),
         "--patience", str(config.get("patience", 3)),
         "--dplr-rank", str(config.get("dplr_rank", 16)),
         "--random-state", str(config.get("random_state", 42)),
@@ -163,10 +162,6 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--weight-decay", default="auto",
                         help="float or 'auto' (transform-specific default)")
-    parser.add_argument("--wd-on-bias", dest="wd_on_bias",
-                        default=True, action=argparse.BooleanOptionalAction,
-                        help="apply weight_decay to the bias (location) too "
-                             "(default: on; use --no-wd-on-bias to disable)")
     parser.add_argument("--patience", type=int, default=3)
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--skip-kbet", dest="skip_kbet", action="store_true",
@@ -187,7 +182,6 @@ def main() -> None:
         "mmd_size": args.mmd_size,
         "batch_size": args.batch_size,
         "weight_decay": args.weight_decay,
-        "wd_on_bias": args.wd_on_bias,
         "patience": args.patience,
         "dplr_rank": args.dplr_rank,
         "random_state": args.random_state,
