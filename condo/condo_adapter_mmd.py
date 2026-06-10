@@ -23,7 +23,7 @@ class ConDoAdapterMMD:
         self,
         transform_type: str = 'affine',
         use_mice_discrete_confounder: bool = False,
-        mmd_size: int = 20,
+        mmd_size: int = 40,
         n_mice_iters: int = 2,
         bootstrap_fraction: float = 1.,
         n_bootstraps: int = None,  # if None, smallest possible given batch_size

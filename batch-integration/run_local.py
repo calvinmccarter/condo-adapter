@@ -40,7 +40,7 @@ def main() -> None:
     parser.add_argument("--n-epochs", default="auto",
                         help="integer or 'auto' (transform-specific default)")
     parser.add_argument("--learning-rate", type=float, default=1e-3)
-    parser.add_argument("--mmd-size", type=int, default=20)
+    parser.add_argument("--mmd-size", type=int, default=40)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--weight-decay", default="auto",
                         help="float or 'auto' (transform-specific default)")
