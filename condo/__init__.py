@@ -11,4 +11,4 @@ from .condo_adapter_mmd import ConDoAdapterMMD
 from .condo_adapter_wd import ConDoAdapterWD
 from .product_prior import product_prior
 
-__version__ = "0.8.0"
+__version__ = "1.1.0"
