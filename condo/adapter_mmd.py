@@ -26,8 +26,11 @@ class AdapterMMD:
         mmd_size: int = 20,
         learning_rate: float = 1e-3,
         weight_decay: float = 1e-4,
+        wd_on_bias: bool = False,
+        patience: int = 3,
         random_state=42,
         verbose: Union[bool, int] = 1,
+        device: Union[str, torch.device] = 'cpu',
     ):
         transforms = {'location-scale', 'affine'}
         if transform_type not in transforms:
@@ -41,8 +44,11 @@ class AdapterMMD:
         self.mmd_size = mmd_size
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
+        self.wd_on_bias = wd_on_bias
+        self.patience = patience
         self.random_state = random_state
         self.verbose = verbose
+        self.device = torch.device(device)
         # bootsize = n_test * bootstrap_fraction sampled with replacement
         # so total dataset is of size n_test * n_bootstraps * bootstrap_fraction * n_impute
 
@@ -57,6 +63,9 @@ class AdapterMMD:
         n = min(Xs.shape[0], Xt.shape[0])
 
         rng = skut.check_random_state(self.random_state)
+        torch.manual_seed(self.random_state)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.random_state)
         bootsize = max(1, int(n * self.bootstrap_fraction))
         if self.n_bootstraps is None:
             n_bootstraps = int(np.ceil(self.batch_size / bootsize))
@@ -75,13 +84,22 @@ class AdapterMMD:
 
         dataset = AdapterDataset(S_list, T_list)
         train_loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+        device = self.device
         model = LinearAdapter(
             transform_type=self.transform_type,
             in_features=ds, out_features=dt, dtype=dataset.dtype())
+        model.to(device)
+        # weight_decay on the matrix (model.M) at self.weight_decay; on the
+        # bias (model.b) it is decoupled via self.wd_on_bias.
+        bias_wd = self.weight_decay if self.wd_on_bias else 0.0
         optimizer = torch.optim.AdamW(
-            model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay,
+            [
+                {"params": [model.M], "weight_decay": self.weight_decay},
+                {"params": [model.b], "weight_decay": bias_wd},
+            ],
+            lr=self.learning_rate,
         )
-        early_stopping = EarlyStopping(patience=3, model=model)
+        early_stopping = EarlyStopping(patience=self.patience, model=model)
         loss_fn = BatchMMDLoss()
         n_batches = len(train_loader)
         if self.verbose:
@@ -93,6 +111,8 @@ class AdapterMMD:
             for bix, (Ssample, Tsample) in enumerate(train_loader):
                 if (epoch == 0) and (bix == 0) and self.verbose:
                     print("MMD sample shapes", Ssample.shape, Tsample.shape)
+                Ssample = Ssample.to(device)
+                Tsample = Tsample.to(device)
                 optimizer.zero_grad()
                 adaptedSsample = model(Ssample)
                 loss = loss_fn(adaptedSsample, Tsample)
@@ -108,6 +128,9 @@ class AdapterMMD:
             if early_stopping.early_stop:
                 break
 
+        self.best_epoch_ = early_stopping.epoch_min
+        self.last_epoch_ = epoch
+        self.best_loss_ = early_stopping.loss_min
         model.load_state_dict(early_stopping.state_dict)
         (M, b) = model.get_M_b()
         (M, b) = (M.astype(Xs.dtype), b.astype(Xs.dtype))

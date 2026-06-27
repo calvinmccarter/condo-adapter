@@ -6,7 +6,7 @@ def readme():
 
 configuration = {
     "name": "condo",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Confounded domain adaptation",
     "long_description": readme(),
     "long_description_content_type": "text/markdown",

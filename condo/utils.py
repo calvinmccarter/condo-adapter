@@ -116,7 +116,8 @@ class EarlyStopping:
         self.patience = patience
         self.counter = 0
         self.early_stop = False
-        self.loss_min = np.Inf
+        # NumPy 2.0 removed `np.Inf`; use `np.inf`.
+        self.loss_min = np.inf
         self.state_dict = None
         if model is not None:
             self.state_dict = deepcopy(model.state_dict())
@@ -134,11 +135,30 @@ class EarlyStopping:
 
 
 class LinearAdapter(torch.nn.Module):
+    """Linear adapter parameterized so AdamW weight decay regularizes
+    toward the identity transform whenever that is meaningful.
+
+    When the transform is square (always the case for ``location-scale``;
+    only when ``in_features == out_features`` for ``affine``), ``self.M``
+    holds a *delta from identity*: at initialization it is zero, and the
+    effective transform is ``(I + ΔM)`` (or ``(1 + Δm)`` element-wise for
+    location-scale). AdamW's pull-toward-zero then translates into a pull
+    toward identity in the effective transform.
+
+    For non-square affine maps, identity isn't defined, so we fall back to
+    the legacy parameterization: ``self.M`` is initialized via
+    ``torch.nn.init.eye_`` (rectangular identity-like) and weight decay
+    pulls it toward zero. The non-square case isn't used by the
+    batch-integration runner, but is preserved here for parity with the
+    earlier API.
+    """
+
     def __init__(
         self,
         transform_type: str,
         in_features: int,
         out_features: int,
+        rank: int = 16,
         device=None,
         dtype=None,
     ) -> None:
@@ -147,6 +167,11 @@ class LinearAdapter(torch.nn.Module):
         self.transform_type = transform_type
         self.in_features = in_features
         self.out_features = out_features
+        self.rank = rank
+        # Delta-from-identity parameterization is used iff the transform is
+        # square (always so for location-scale). Recorded once so
+        # forward / get_M_b can branch cheaply.
+        self.is_square = in_features == out_features
 
         if transform_type == "location-scale":
             assert in_features == out_features
@@ -159,62 +184,19 @@ class LinearAdapter(torch.nn.Module):
                 torch.empty((out_features, in_features), **factory_kwargs)
             )
             self.b = torch.nn.Parameter(torch.empty(out_features, **factory_kwargs))
-        else:
-            raise ValueError(f"invalid transform_type:{transform_type}")
-        self.reset_parameters()
 
-    def reset_parameters(self) -> None:
-        if self.transform_type == "location-scale":
-            torch.nn.init.ones_(self.M)
-            torch.nn.init.zeros_(self.b)
-        elif self.transform_type == "affine":
-            torch.nn.init.eye_(self.M)
-            torch.nn.init.zeros_(self.b)
-
-    def forward(self, S: torch.Tensor) -> torch.Tensor:
-        (batch_size, n_mice_impute, ds) = S.shape
-        S_ = S.reshape(-1, ds)
-        if self.transform_type == "location-scale":
-            adaptedSsample = S_ * self.M.reshape(1, -1) + self.b.reshape(1, -1)
-        elif self.transform_type == "affine":
-            adaptedSsample = S_ @ self.M.T + self.b.reshape(1, -1)
-        adaptedSsample = adaptedSsample.reshape(batch_size, n_mice_impute, -1)
-        return adaptedSsample
-
-    def extra_repr(self) -> str:
-        return "transform_type={}, in_features={}, out_features={}".format(
-            self.transform_type,
-            self.in_features,
-            self.out_features,
-        )
-
-    def get_M_b(self):
-        best_M = self.M.detach().numpy()
-        best_b = self.b.detach().numpy()
-        return (best_M, best_b)
-
-
-"""
-class LinearAdapter(torch.nn.Module):
-    def __init__(
-        self,
-        transform_type: str,
-        num_feats: int,
-        device=None,
-        dtype=None,
-    ) -> None:
-        factory_kwargs = {"device": device, "dtype": dtype}
-        super().__init__()
-        self.transform_type = transform_type
-        self.num_feats = num_feats
-
-        if transform_type == "location-scale":
+        elif transform_type == "diagonal-plus-low-rank":
+            assert in_features == out_features, (
+                "diagonal-plus-low-rank requires square (in_features == out_features)"
+            )
+            num_feats = in_features
+            # M holds the diagonal delta-from-identity: effective d = 1 + ΔM.
             self.M = torch.nn.Parameter(torch.empty(num_feats, **factory_kwargs))
-            self.b = torch.nn.Parameter(torch.empty(num_feats, **factory_kwargs))
-
-        elif transform_type == "affine":
-            self.M = torch.nn.Parameter(
-                torch.empty((num_feats, num_feats), **factory_kwargs)
+            self.U = torch.nn.Parameter(
+                torch.empty(num_feats, rank, **factory_kwargs)
+            )
+            self.V = torch.nn.Parameter(
+                torch.empty(num_feats, rank, **factory_kwargs)
             )
             self.b = torch.nn.Parameter(torch.empty(num_feats, **factory_kwargs))
         else:
@@ -222,35 +204,96 @@ class LinearAdapter(torch.nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        if self.transform_type == "location-scale":
+        # b always starts at zero (identity translation).
+        torch.nn.init.zeros_(self.b)
+        if self.transform_type == "diagonal-plus-low-rank":
             torch.nn.init.zeros_(self.M)
-            torch.nn.init.zeros_(self.b)
-        elif self.transform_type == "affine":
+            # Small symmetric random init for U, V breaks the saddle at
+            # U=V=0 while keeping initial UV^T tiny (~sqrt(rank)*1e-3 per entry).
+            torch.nn.init.normal_(self.U, mean=0.0, std=1e-3)
+            torch.nn.init.normal_(self.V, mean=0.0, std=1e-3)
+        elif self.is_square:
             torch.nn.init.zeros_(self.M)
-            torch.nn.init.zeros_(self.b)
+        else:
+            # Non-square affine: legacy eye_ init, regularizes toward zero.
+            torch.nn.init.eye_(self.M)
 
     def forward(self, S: torch.Tensor) -> torch.Tensor:
+        (batch_size, n_mice_impute, ds) = S.shape
+        S_ = S.reshape(-1, ds)
         if self.transform_type == "location-scale":
-            adaptedSsample = S * self.M.reshape(1, -1) + self.b.reshape(1, -1) + S
+            # Effective scale is 1 + ΔM, applied elementwise.
+            adaptedSsample = (
+                S_ * (1.0 + self.M).reshape(1, -1) + self.b.reshape(1, -1)
+            )
         elif self.transform_type == "affine":
-            adaptedSsample = S @ self.M.T + self.b.reshape(1, -1) + S
+            if self.is_square:
+                # Effective M is (I + ΔM); compute S @ (I + ΔM)^T = S + S @ ΔM^T
+                # to avoid materializing the d×d identity each forward.
+                adaptedSsample = S_ + S_ @ self.M.T + self.b.reshape(1, -1)
+            else:
+                adaptedSsample = S_ @ self.M.T + self.b.reshape(1, -1)
+        elif self.transform_type == "diagonal-plus-low-rank":
+            # y = S * (1 + ΔM) + (S @ V) @ U^T + b. Never materializes the
+            # dense d×d matrix; cost is O(N d r) instead of O(N d^2).
+            adaptedSsample = (
+                S_ * (1.0 + self.M).reshape(1, -1)
+                + (S_ @ self.V) @ self.U.T
+                + self.b.reshape(1, -1)
+            )
+        adaptedSsample = adaptedSsample.reshape(batch_size, n_mice_impute, -1)
         return adaptedSsample
 
     def extra_repr(self) -> str:
-        return "transform_type={}, num_feats={}".format(
+        return (
+            "transform_type={}, in_features={}, out_features={}, delta_param={}"
+        ).format(
             self.transform_type,
-            self.num_feats,
+            self.in_features,
+            self.out_features,
+            self.is_square,
         )
 
+    def perturbation_sq(self):
+        """Return ||diag(ΔM) + U V^T||²_F as a scalar tensor.
+
+        Equals the squared Frobenius norm of the effective matrix's
+        deviation from identity. Used as the explicit regularizer for the
+        diagonal-plus-low-rank transform (replaces AdamW weight decay on
+        the individual factors). Uses the r×r-trace identity to avoid
+        materializing the dense d×d perturbation:
+            ||UV^T||²_F = trace(U^T U V^T V) = sum(elementwise(U^T U, V^T V))
+            trace(diag(ΔM) UV^T) = sum_i ΔM_i <U_i, V_i>
+        """
+        assert self.transform_type == "diagonal-plus-low-rank"
+        diag_sq = (self.M ** 2).sum()
+        UTU = self.U.T @ self.U
+        VTV = self.V.T @ self.V
+        prod_sq = (UTU * VTV).sum()
+        cross = (self.M * (self.U * self.V).sum(dim=-1)).sum()
+        return diag_sq + prod_sq + 2 * cross
+
     def get_M_b(self):
-        best_M = self.M.detach().numpy()
-        best_b = self.b.detach().numpy()
-        if best_M.ndim == 1:
-            best_M = best_M + 1.
-        else:
-            best_M = best_M + np.eye(self.num_feats, dtype=best_M.dtype)
+        # `.cpu()` is a no-op when the tensor is already on CPU, so this
+        # path is safe regardless of where the module lives.
+        best_b = self.b.detach().cpu().numpy()
+        if self.transform_type == "diagonal-plus-low-rank":
+            # Materialize the dense effective matrix diag(1 + ΔM) + U V^T
+            # so downstream callers can treat it as a square affine M.
+            delta_d = self.M.detach().cpu().numpy()
+            U = self.U.detach().cpu().numpy()
+            V = self.V.detach().cpu().numpy()
+            best_M = np.diag(1.0 + delta_d) + U @ V.T
+            return (best_M, best_b)
+        best_M = self.M.detach().cpu().numpy()
+        if self.is_square:
+            # Recover the effective transform that downstream numpy code
+            # (transform / inverse_transform) expects.
+            if self.transform_type == "location-scale":
+                best_M = best_M + 1.0
+            else:  # square affine
+                best_M = best_M + np.eye(best_M.shape[0], dtype=best_M.dtype)
         return (best_M, best_b)
-"""
 
 
 class RBF(torch.nn.Module):
@@ -258,7 +301,12 @@ class RBF(torch.nn.Module):
     def __init__(self, n_kernels=1, mul_factor=2.0, bandwidth=None):
         super().__init__()
         # XXX n_kernels > 1 causes a segfault at torch.exp with torch==2.1.2 and numpy==1.26.3
-        self.bandwidth_multipliers = mul_factor ** (torch.arange(n_kernels) - n_kernels // 2)
+        # Register as a buffer so .to(device) on the loss/parent module
+        # propagates it; otherwise CPU/CUDA mixing in forward() raises.
+        self.register_buffer(
+            'bandwidth_multipliers',
+            mul_factor ** (torch.arange(n_kernels) - n_kernels // 2),
+        )
         self.bandwidth = bandwidth
 
     def get_bandwidth(self, L2_distances):
@@ -270,7 +318,9 @@ class RBF(torch.nn.Module):
 
     def forward(self, X):
         L2_distances = torch.cdist(X, X) ** 2
-        bws = (self.get_bandwidth(L2_distances.detach()) * self.bandwidth_multipliers)[:, None, None]
+        # Track the input's device in case the loss wasn't explicitly .to()'d.
+        bw_mul = self.bandwidth_multipliers.to(X.device)
+        bws = (self.get_bandwidth(L2_distances.detach()) * bw_mul)[:, None, None]
         beforeexp = -L2_distances[None, ...] / bws
         afterexp = torch.exp(beforeexp)
         return afterexp.sum(dim=0)
@@ -284,7 +334,9 @@ class BatchMMDLoss(torch.nn.Module):
 
     def forward(self, allX, allY):
         batch_size = allX.shape[0]
-        mmd = torch.tensor(0.)
+        # Initialize accumulator on the input's device so the loss runs
+        # cross-device cleanly without callers needing to .to() the loss.
+        mmd = torch.tensor(0., device=allX.device)
 
         for i in range(batch_size):
             X = allX[i, :, :]

@@ -1,0 +1,66 @@
+[
+  {
+    "metric": "asw_label",
+    "score": 0.4935217066667974,
+    "dt": 2791.780683517456
+  },
+  {
+    "metric": "asw_batch",
+    "score": 0.7913793325424194,
+    "dt": 87.84829235076904
+  },
+  {
+    "metric": "graph_connectivity",
+    "score": 0.8589666563893129,
+    "dt": 1.0422673225402832
+  },
+  {
+    "metric": "pcr",
+    "score": 0.23674201285531776,
+    "dt": 23.929736137390137
+  },
+  {
+    "metric": "ari",
+    "score": 0.4588946211251808,
+    "dt": 0.08823370933532715
+  },
+  {
+    "metric": "nmi",
+    "score": 0.7515149565743392,
+    "dt": 1.3589744567871094
+  },
+  {
+    "metric": "isolated_label_asw",
+    "score": 0.5760908126831055,
+    "dt": 2811.7443964481354
+  },
+  {
+    "metric": "isolated_label_f1",
+    "score": 0.050281015480074076,
+    "dt": 575.5575265884399
+  },
+  {
+    "metric": "hvg_overlap",
+    "error": "RuntimeError: hvg_overlap needs either corrected_counts layer or .X on integrated",
+    "traceback": "Traceback (most recent call last):\n  File \"/home/ssm-user/sandbox/batchworld/condo-adapter/batch-integration/eval_variant.py\", line 317, in evaluate\n    raise RuntimeError(\nRuntimeError: hvg_overlap needs either corrected_counts layer or .X on integrated\n"
+  },
+  {
+    "metric": "kbet",
+    "skipped": true
+  },
+  {
+    "metric": "ilisi",
+    "score": 0.020521735613086598,
+    "dt": 194.6736981868744
+  },
+  {
+    "metric": "clisi",
+    "score": 0.999021242373929,
+    "dt": 195.201313495636
+  },
+  {
+    "metric": "cell_cycle_conservation",
+    "score": 0.8025985388288891,
+    "dt": 401.3963043689728
+  }
+]

@@ -132,3 +132,8 @@ dmypy.json
 .DC_Store
 .DS_Store
 .idea/
+
+# batch-integration run artifacts (logs, h5ad outputs, score JSONs)
+batch-integration/work/
+work/
+paper.pdf

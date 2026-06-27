@@ -23,7 +23,7 @@ class ConDoAdapterMMD:
         self,
         transform_type: str = 'affine',
         use_mice_discrete_confounder: bool = False,
-        mmd_size: int = 20,
+        mmd_size: int = 40,
         n_mice_iters: int = 2,
         bootstrap_fraction: float = 1.,
         n_bootstraps: int = None,  # if None, smallest possible given batch_size
@@ -31,14 +31,18 @@ class ConDoAdapterMMD:
         batch_size: int = 8,
         learning_rate: float = 1e-3,
         weight_decay: float = 1e-4,
+        patience: int = 3,
+        dplr_rank: int = 16,
         random_state=42,
         verbose: Union[bool, int] = 1,
+        device: Union[str, torch.device] = 'cpu',
     ):
-        transforms = {'location-scale', 'affine'}
+        transforms = {'location-scale', 'affine', 'diagonal-plus-low-rank'}
         if transform_type not in transforms:
             raise NotImplementedError(f'transform_type {transform_type}')
         assert bootstrap_fraction <= 1
         self.transform_type = transform_type
+        self.dplr_rank = dplr_rank
         self.use_mice_discrete_confounder = use_mice_discrete_confounder
         self.mmd_size = mmd_size
         self.n_mice_iters = n_mice_iters
@@ -48,8 +52,10 @@ class ConDoAdapterMMD:
         self.batch_size = batch_size
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
+        self.patience = patience
         self.random_state = random_state
         self.verbose = verbose
+        self.device = torch.device(device)
         # bootsize = n_test * bootstrap_fraction sampled with replacement
         # each is then given n_imp impute samples
         # so total dataset is of size n_test * n_bootstraps * bootstrap_fraction * n_impute
@@ -71,6 +77,9 @@ class ConDoAdapterMMD:
         assert Xs.dtype == Xt.dtype
         dtype = Xs.dtype
         rng = skut.check_random_state(self.random_state)
+        torch.manual_seed(self.random_state)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.random_state)
 
         Z_test, W_test, encoder = product_prior(Zs, Zt)
         W_test = W_test.astype(dtype)
@@ -159,13 +168,35 @@ class ConDoAdapterMMD:
             dataset = AdapterDataset(S_list, T_list)
             train_loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
+        device = self.device
         model = LinearAdapter(
             transform_type=self.transform_type,
-            in_features=ds, out_features=dt, dtype=dataset.dtype())
-        optimizer = torch.optim.AdamW(
-            model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay,
-        )
-        early_stopping = EarlyStopping(patience=3, model=model)
+            in_features=ds, out_features=dt,
+            rank=self.dplr_rank,
+            dtype=dataset.dtype())
+        model.to(device)
+        if self.transform_type == "diagonal-plus-low-rank":
+            # Regularization for DPLR is the explicit loss term
+            #     self.weight_decay * ||diag(ΔM) + U V^T||²_F
+            # added inside the training loop. AdamW's built-in WD is zeroed
+            # for M/U/V so the optimizer doesn't double up on it. b gets the
+            # standard AdamW WD.
+            optimizer = torch.optim.AdamW(
+                [
+                    {"params": [model.M], "weight_decay": 0.0},
+                    {"params": [model.U], "weight_decay": 0.0},
+                    {"params": [model.V], "weight_decay": 0.0},
+                    {"params": [model.b], "weight_decay": self.weight_decay},
+                ],
+                lr=self.learning_rate,
+            )
+        else:
+            optimizer = torch.optim.AdamW(
+                model.parameters(),
+                lr=self.learning_rate,
+                weight_decay=self.weight_decay,
+            )
+        early_stopping = EarlyStopping(patience=self.patience, model=model)
         loss_fn = BatchMMDLoss()
         n_batches = len(train_loader)
         if self.verbose:
@@ -184,9 +215,13 @@ class ConDoAdapterMMD:
                     assert Tsample.shape[0] == 1
                     Ssample = Ssample.reshape(Ssample.shape[1], Ssample.shape[2], Ssample.shape[3])
                     Tsample = Tsample.reshape(Tsample.shape[1], Tsample.shape[2], Tsample.shape[3])
+                Ssample = Ssample.to(device)
+                Tsample = Tsample.to(device)
                 optimizer.zero_grad()
                 adaptedSsample = model(Ssample)
                 loss = loss_fn(adaptedSsample, Tsample)
+                if self.transform_type == "diagonal-plus-low-rank" and self.weight_decay > 0:
+                    loss = loss + self.weight_decay * model.perturbation_sq()
                 loss.backward()
                 optimizer.step()
 
@@ -201,13 +236,18 @@ class ConDoAdapterMMD:
             if early_stopping.early_stop:
                 break
 
+        # Surface what actually happened in training so callers
+        # (e.g. agglomerative_integrate) can log it per merge.
+        self.best_epoch_ = early_stopping.epoch_min
+        self.last_epoch_ = epoch
+        self.best_loss_ = early_stopping.loss_min
         model.load_state_dict(early_stopping.state_dict)
         (M, b) = model.get_M_b()
         (M, b) = (M.astype(Xs.dtype), b.astype(Xs.dtype))
         if self.transform_type == 'location-scale':
             self.m_ = M
             self.m_inv_ = 1 / self.m_
-        elif self.transform_type == 'affine':
+        elif self.transform_type in ('affine', 'diagonal-plus-low-rank'):
             self.M_ = M
             if M.shape[0] == M.shape[1]:
                 self.M_inv_ = np.linalg.inv(self.M_)
@@ -219,7 +259,7 @@ class ConDoAdapterMMD:
     ):
         if self.transform_type == 'location-scale':
             adaptedS = Xs * self.m_.reshape(1, -1) + self.b_.reshape(1, -1)
-        elif self.transform_type == 'affine':
+        elif self.transform_type in ('affine', 'diagonal-plus-low-rank'):
             adaptedS = Xs @ self.M_.T + self.b_.reshape(1, -1)
         return adaptedS
 
@@ -229,6 +269,6 @@ class ConDoAdapterMMD:
     ):
         if self.transform_type == 'location-scale':
             adaptedT = (Xt - self.b_.reshape(1, -1)) * self.m_inv_.reshape(1, -1)
-        elif self.transform_type == 'affine':
+        elif self.transform_type in ('affine', 'diagonal-plus-low-rank'):
             adaptedT = (Xt - self.b_.reshape(1, -1)) @ self.M_inv_.T
         return adaptedT
