@@ -81,6 +81,7 @@ def fit_and_eval(
         "--patience", str(config.get("patience", 3)),
         "--dplr-rank", str(config.get("dplr_rank", 16)),
         "--random-state", str(config.get("random_state", 42)),
+        "--ranking-strategy", str(config.get("ranking_strategy", "celltype_silhouette")),
         "--input", str(dataset),
         "--output", str(out_h5),
     ]
@@ -164,6 +165,15 @@ def main() -> None:
                         help="float or 'auto' (transform-specific default)")
     parser.add_argument("--patience", type=int, default=3)
     parser.add_argument("--random-state", type=int, default=42)
+    parser.add_argument(
+        "--ranking-strategy", dest="ranking_strategy",
+        choices=[
+            "celltype_silhouette", "random", "biggest",
+            "batch_silhouette_low", "batch_silhouette_high",
+        ],
+        default="celltype_silhouette",
+        help="Agglomerative seed + neighbor ranking criterion (ablation axis).",
+    )
     parser.add_argument("--skip-kbet", dest="skip_kbet", action="store_true",
                         help="skip kbet in eval (slow; not in composites)")
     args = parser.parse_args()
@@ -185,6 +195,7 @@ def main() -> None:
         "patience": args.patience,
         "dplr_rank": args.dplr_rank,
         "random_state": args.random_state,
+        "ranking_strategy": args.ranking_strategy,
         "skip_kbet": args.skip_kbet,
     }
     (sweep_dir / "config.json").write_text(json.dumps(config, indent=2))

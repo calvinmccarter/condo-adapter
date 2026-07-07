@@ -52,6 +52,10 @@ _KBET_VENV_PY = Path(
     )
 )
 _KBET_SCRIPT = _HERE / "scripts" / "compute_kbet.py"
+# kbet subprocess wall-clock budget. Default 1h; raise via CONDO_KBET_TIMEOUT
+# (seconds) on big-memory machines where kbet on 300k+ cells needs longer than
+# the default before it would otherwise be recorded as a timeout error.
+_KBET_TIMEOUT = int(os.environ.get("CONDO_KBET_TIMEOUT", 60 * 60))
 
 
 def _ensure_processed(integrated: ad.AnnData, dataset: ad.AnnData) -> ad.AnnData:
@@ -395,7 +399,7 @@ def evaluate(
                 capture_output=True,
                 text=True,
                 env=env,
-                timeout=60 * 60,
+                timeout=_KBET_TIMEOUT,
             )
             if proc.returncode == 0:
                 # The subprocess prints lines of progress then a single
