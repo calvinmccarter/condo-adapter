@@ -40,7 +40,8 @@ def main() -> None:
         "--ranking-strategy",
         dest="ranking_strategy",
         choices=[
-            "celltype_silhouette", "random", "biggest",
+            "celltype_silhouette", "celltype_silhouette_low",
+            "random", "biggest", "smallest",
             "batch_silhouette_low", "batch_silhouette_high",
         ],
         default="celltype_silhouette",

@@ -38,15 +38,18 @@ FULLBENCH = REPO / "batch-integration" / "scripts" / "fullbench.py"
 
 ALL_DATASETS = ["dkd", "gtex_v9", "immune_cell_atlas", "hypomap",
                 "mouse_pancreas_atlas", "tabula_sapiens"]
-ALL_STRATEGIES = ["celltype_silhouette", "random", "biggest",
+ALL_STRATEGIES = ["celltype_silhouette", "celltype_silhouette_low",
+                  "random", "biggest", "smallest",
                   "batch_silhouette_low", "batch_silhouette_high"]
 
 
 def label_for(strategy: str) -> str:
     return {
         "celltype_silhouette": "abl_celltype_silhouette",
+        "celltype_silhouette_low": "abl_celltype_sil_low",
         "random": "abl_random_rs42",
         "biggest": "abl_biggest",
+        "smallest": "abl_smallest",
         "batch_silhouette_low": "abl_batch_sil_low",
         "batch_silhouette_high": "abl_batch_sil_high",
     }[strategy]
