@@ -1,0 +1,67 @@
+[
+  {
+    "metric": "asw_label",
+    "score": 0.570973239839077,
+    "dt": 570.1035001277924
+  },
+  {
+    "metric": "asw_batch",
+    "score": 0.9130071997642517,
+    "dt": 58.291663646698
+  },
+  {
+    "metric": "graph_connectivity",
+    "score": 0.9778506177648904,
+    "dt": 0.2993617057800293
+  },
+  {
+    "metric": "pcr",
+    "score": 0.5332264934545266,
+    "dt": 14.624187469482422
+  },
+  {
+    "metric": "ari",
+    "score": 0.6592539546330671,
+    "dt": 0.05583977699279785
+  },
+  {
+    "metric": "nmi",
+    "score": 0.8009999944765368,
+    "dt": 0.9694294929504395
+  },
+  {
+    "metric": "isolated_label_asw",
+    "score": 0.6114000678062439,
+    "dt": 580.8843491077423
+  },
+  {
+    "metric": "isolated_label_f1",
+    "score": 0.054636951833213515,
+    "dt": 7.841911315917969
+  },
+  {
+    "metric": "hvg_overlap",
+    "score": 0.4455,
+    "dt": 10.22383713722229
+  },
+  {
+    "metric": "kbet",
+    "error": "TimeoutExpired: Command '['/home/ssm-user/sandbox/batchworld/.venv-kbet/bin/python', '/home/ssm-user/sandbox/batchworld/condo-adapter/batch-integration/scripts/compute_kbet.py', '--integrated', '/home/ssm-user/sandbox/batchworld/work/abl_celltype_silhouette/outputs/immune_cell_atlas.h5ad', '--solution', '/home/ssm-user/sandbox/batchworld/fullbench/datasets/immune_cell_atlas/solution.h5ad']' timed out after 3600 seconds",
+    "traceback": "Traceback (most recent call last):\n  File \"/home/ssm-user/sandbox/batchworld/condo-adapter/batch-integration/eval_variant.py\", line 386, in evaluate\n    proc = subprocess.run(\n           ^^^^^^^^^^^^^^^\n  File \"/home/ssm-user/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/subprocess.py\", line 550, in run\n    stdout, stderr = process.communicate(input, timeout=timeout)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ssm-user/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/subprocess.py\", line 1209, in communicate\n    stdout, stderr = self._communicate(input, endtime, timeout)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nsubprocess.TimeoutExpired: Command '['/home/ssm-user/sandbox/batchworld/.venv-kbet/bin/python', '/home/ssm-user/sandbox/batchworld/condo-adapter/batch-integration/scripts/compute_kbet.py', '--integrated', '/home/ssm-user/sandbox/batchworld/work/abl_celltype_silhouette/outputs/immune_cell_atlas.h5ad', '--solution', '/home/ssm-user/sandbox/batchworld/fullbench/datasets/immune_cell_atlas/solution.h5ad']' timed out after 3600 seconds\n"
+  },
+  {
+    "metric": "ilisi",
+    "score": 0.1693117130326379,
+    "dt": 173.95726013183594
+  },
+  {
+    "metric": "clisi",
+    "score": 0.9965993790562528,
+    "dt": 174.71583318710327
+  },
+  {
+    "metric": "cell_cycle_conservation",
+    "score": 0.7381789446632553,
+    "dt": 199.22900104522705
+  }
+]
