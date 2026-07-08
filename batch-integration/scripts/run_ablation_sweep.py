@@ -17,7 +17,6 @@ Typical uses
 This 124 GB box (fits <=70 GB): dkd, gtex, hypomap, mouse_pancreas.
     python run_ablation_sweep.py --datasets dkd gtex_v9 hypomap mouse_pancreas_atlas
 Big-memory GPU box (immune/tabula fits need 100-170 GB) WITH kbet:
-    CONDO_KBET_TIMEOUT=18000 \\
     python run_ablation_sweep.py --datasets immune_cell_atlas tabula_sapiens
 
 Memory note: peak fit RAM = 2*min(src,tgt)*mmd_size*d*8 bytes (driven by the
@@ -131,7 +130,6 @@ def main() -> None:
     ]
     jobs = [(ds, st) for ds in args.datasets for st in args.strategies]
     print(f">> {len(jobs)} jobs, SEQUENTIAL, skip_kbet={args.skip_kbet}, "
-          f"kbet_timeout={os.environ.get('CONDO_KBET_TIMEOUT', '3600')}s, "
           f"work_dir={args.work_dir}", flush=True)
     print(f">> CONDO_KBET_PYTHON={os.environ.get('CONDO_KBET_PYTHON', '(unset!)')}",
           flush=True)

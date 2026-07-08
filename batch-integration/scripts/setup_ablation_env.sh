@@ -77,7 +77,6 @@ cat <<EOF
    export CONDO_KBET_PYTHON=$ROOT/.venv-kbet/bin/python
    export R_LIBS_USER=$R_LIBS_USER
    export R_HOME=/usr/lib/R
-   export CONDO_KBET_TIMEOUT=18000   # 5h; big-dataset kbet is slow
 
 >> Then, e.g. (big-memory GPU box, immune + tabula, WITH kbet):
    $ROOT/.venv/bin/python \\
