@@ -117,13 +117,18 @@ def main() -> None:
     ap.add_argument("--python", default=sys.executable)
     ap.add_argument("--random-state", type=int, default=42)
     # v3_baseline_seeded config (do not change for the ablation)
+    ap.add_argument("--transform-type", default="affine",
+                    choices=["affine", "location-scale"])
     ap.add_argument("--mmd-size", default="40")
     ap.add_argument("--n-epochs", default="5")
-    ap.add_argument("--weight-decay", default="1e-4")
+    ap.add_argument("--weight-decay", default="1e-4",
+                    help="v3_baseline_seeded uses 1e-4 for affine; "
+                         "location-scale conventionally uses 1e-5.")
     args = ap.parse_args()
 
     fixed = [
-        "--divergence", "mmd", "--transform-type", "affine", "--rep", "features",
+        "--divergence", "mmd", "--transform-type", args.transform_type,
+        "--rep", "features",
         "--n-epochs", str(args.n_epochs), "--weight-decay", str(args.weight_decay),
         "--learning-rate", "1e-3", "--mmd-size", str(args.mmd_size),
         "--batch-size", "8", "--patience", "3",
