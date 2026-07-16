@@ -57,13 +57,22 @@ However, comparing `abl_celltype_silhouette` scores across datasets
 drift on non-deterministic torch/CUDA ops. Documented, expected, called
 out during the ablation.
 
-kbet is not part of the 7-metric leaderboard composite (excluded because
-the published baselines lack it on hypomap and mouse_pancreas_atlas).
-The kbet field in each ablation JSON is either numeric or
-`{"skipped": true}`; the latter is being backfilled as a separate pass
-running kbet against local ext4 copies of the h5ads to avoid the
-amazon-efs proxy stalls we hit trying to run kbet against NFS-mounted
-h5ads on hypomap.
+kbet is not part of the 7-metric leaderboard composite (excluded
+because the published baselines lack it on hypomap and
+mouse_pancreas_atlas). The kbet field in each ablation JSON is either
+numeric or `{"skipped": true}`:
+
+- **Affine ablation** (`abl_*/`): kbet numeric on dkd, gtex_v9,
+  immune_cell_atlas, tabula_sapiens (28/42 cells). Skipped on hypomap
+  and mouse_pancreas_atlas (14/42) — the runner set `--skip-kbet` on
+  those two datasets because kbet on the 385k-cell hypomap reliably
+  triggered an amazon-efs proxy stall requiring an instance reboot.
+- **Loc-scale ablation** (`abl_locscale_*/`): kbet skipped on all
+  42/42 cells. Same reason (three consecutive reboots during
+  hypomap-kbet, once with h5ads on NFS, once on retry, once with the
+  h5ads copied to local ext4 — the trigger appears to be cumulative
+  uptime under sustained heavy compute rather than kbet's NFS I/O
+  specifically). Not worth chasing given kbet is out of the composite.
 
 ## Computing the leaderboard
 
