@@ -36,6 +36,21 @@ def main() -> None:
         "--rep", choices=["features", "pca"], default="features"
     )
     parser.add_argument("--hvg-only", dest="hvg_only", action="store_true")
+    parser.add_argument(
+        "--ranking-strategy",
+        dest="ranking_strategy",
+        choices=[
+            "celltype_silhouette", "celltype_silhouette_low",
+            "random", "biggest", "smallest",
+            "batch_silhouette_low", "batch_silhouette_high",
+        ],
+        default="celltype_silhouette",
+        help=(
+            "Agglomerative seed + compatible-neighbor ranking criterion. "
+            "'celltype_silhouette' is the v3_baseline_seeded default; the "
+            "others are the paper ablations."
+        ),
+    )
     parser.add_argument("--bootstrap-fraction", type=float, default=1.0)
     parser.add_argument("--n-epochs", default="auto",
                         help="integer or 'auto' (transform-specific default)")
@@ -93,6 +108,8 @@ def main() -> None:
         name_parts.append("pca")
     if args.hvg_only:
         name_parts.append("hvg")
+    if args.ranking_strategy != "celltype_silhouette":
+        name_parts.append(args.ranking_strategy)
     name = "_".join(name_parts)
 
     par = {
@@ -102,6 +119,7 @@ def main() -> None:
         "transform_type": args.transform_type,
         "rep": args.rep,
         "hvg_only": args.hvg_only,
+        "ranking_strategy": args.ranking_strategy,
         "bootstrap_fraction": args.bootstrap_fraction,
         "n_epochs": args.n_epochs,
         "learning_rate": args.learning_rate,

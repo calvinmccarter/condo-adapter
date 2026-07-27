@@ -395,7 +395,6 @@ def evaluate(
                 capture_output=True,
                 text=True,
                 env=env,
-                timeout=60 * 60,
             )
             if proc.returncode == 0:
                 # The subprocess prints lines of progress then a single
