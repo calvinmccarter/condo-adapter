@@ -19,6 +19,18 @@ fit/eval pipeline.
 - `sweeps/v3_dplr_r16_ne50_wd1e-5_all/` — diagonal-plus-low-rank at the
   auto default (rank=16, ne=50, wd=1e-5).
 
+### Official location-scale result (wd=1e-4, matches affine)
+- `sweeps/abl_locscale_celltype_silhouette_wd1e-4/` — **the official
+  location-scale baseline for every downstream comparison.** Identical to
+  the affine official baseline `abl_celltype_silhouette` in every
+  hyperparameter except the transform (mmd, features, ne=5, lr=1e-3,
+  mmd_size=40, bs=8, patience=3, celltype_silhouette ranking, **wd=1e-4**),
+  so affine and location-scale are now reported under the SAME
+  hyperparameters. All 6 datasets, one machine, torch-seeded. Replaces the
+  wd=1e-5 loc-scale as the headline result; the wd=1e-5
+  `abl_locscale_celltype_silhouette/` is retained only as the anchor cell
+  of the merge-order ablation below.
+
 ### Ranking-strategy ablation
 Same config as v3_baseline_seeded / v3_locscale_ne5_wd1e-5 (mmd, features,
 ne=5), varying only the `--ranking-strategy` flag that drives BOTH the
@@ -40,7 +52,11 @@ integrator. All ablation runs are torch-seeded (reproducible on-machine).
 
 **Location-scale variant** (wd=1e-5): the seven `sweeps/abl_locscale_*/`
 directories mirror the affine ones one-to-one with the same seven
-strategy suffixes.
+strategy suffixes. These stay at wd=1e-5 as a self-consistent merge-order
+ablation (vary only the strategy). NB: the headline official loc-scale
+result is the wd=1e-4 rerun above (`abl_locscale_celltype_silhouette_wd1e-4/`);
+the wd=1e-5 `abl_locscale_celltype_silhouette/` is only the anchor of this
+ablation, not the reported loc-scale result.
 
 Each sweep dir has one JSON per dataset (`dkd, gtex_v9,
 mouse_pancreas_atlas, immune_cell_atlas, hypomap, tabula_sapiens`). Each
