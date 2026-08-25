@@ -115,15 +115,24 @@ def evaluate(
     dataset_path: str,
     solution_path: str,
     skip_kbet: bool = False,
+    timing: dict | None = None,
 ) -> list[dict]:
+    _t_eval = time.time()
     print(">> Read integrated", flush=True)
+    _t_read = time.time()
     integrated = ad.read_h5ad(integrated_path)
+    fit_timing = integrated.uns.get("condo_timing")
+    if fit_timing is not None:
+        fit_timing = {k: float(v) for k, v in dict(fit_timing).items()}
     print(">> Read dataset", flush=True)
     dataset = ad.read_h5ad(dataset_path)
     print(">> Read solution", flush=True)
     solution = ad.read_h5ad(solution_path)
+    read_seconds = time.time() - _t_read
 
+    _t_ensure = time.time()
     integrated = _ensure_processed(integrated, dataset)
+    ensure_seconds = time.time() - _t_ensure
 
     # Graft labels & uns from the solution (the official per-metric scripts
     # do `adata.obs = solution.obs; adata.uns |= solution.uns`).
@@ -197,7 +206,9 @@ def evaluate(
 
     # Precompute the leiden clustering once (igraph) and share it between
     # nmi/ari and isolated_label_f1, matching openproblems' precompute step.
+    _t_leiden = time.time()
     _precompute_leiden(integrated)
+    leiden_seconds = time.time() - _t_leiden
 
     # ----------------------------------------------- clustering_overlap (ari + nmi)
     try:
@@ -496,6 +507,19 @@ def evaluate(
 
     results.append(_safe("cell_cycle_conservation", _ccc))
 
+    if timing is not None:
+        metrics_seconds = sum(
+            r["dt"] for r in results if isinstance(r.get("dt"), (int, float))
+        )
+        timing["fit"] = fit_timing
+        timing["eval"] = {
+            "read_seconds": read_seconds,
+            "ensure_processed_seconds": ensure_seconds,
+            "leiden_precompute_seconds": leiden_seconds,
+            "metrics_seconds": metrics_seconds,
+            "total_seconds": time.time() - _t_eval,
+        }
+
     return results
 
 
@@ -512,12 +536,18 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    timing: dict = {}
     results = evaluate(
-        args.integrated, args.dataset, args.solution, skip_kbet=args.skip_kbet
+        args.integrated, args.dataset, args.solution,
+        skip_kbet=args.skip_kbet, timing=timing,
     )
 
     Path(args.output).write_text(json.dumps(results, indent=2))
+    Path(args.output).with_suffix(".timing.json").write_text(
+        json.dumps(timing, indent=2)
+    )
     print(json.dumps(results, indent=2), flush=True)
+    print(">> EVAL_TIMING " + json.dumps(timing), flush=True)
 
 
 if __name__ == "__main__":
