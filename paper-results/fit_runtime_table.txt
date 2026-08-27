@@ -1,0 +1,27 @@
+\begin{table}[t]
+\centering
+\caption{ConDo fit runtime (minutes) on each benchmark dataset, for the
+affine and location-scale transforms under the shared official configuration
+(MMD, features, $n_{\text{epochs}}{=}5$, weight decay $10^{-4}$,
+\texttt{celltype\_silhouette} ordering). Fit time is wall-clock for the
+complete per-dataset fit (read, agglomerative integration, write) on one
+NVIDIA RTX PRO 6000 GPU. Wall-clock includes the gzip write of the corrected
+output, which accounts for at most ${\sim}11\%$ of fit time (measured
+$4.6\%$/$4.8\%$/$11.4\%$ on DKD/GTEx/HypoMap); input reading is negligible
+($<3$\,s), so these times are within ${\sim}10\%$ of pure integration compute.}
+\label{tab:condo-fit-runtime}
+\begin{tabular}{lrrr}
+\toprule
+Dataset & Cells & Affine (min) & Location-scale (min) \\
+\midrule
+DKD & 39k & 6.8 & 4.8 \\
+GTEx v9 & 209k & 33.4 & 25.4 \\
+Immune cell atlas & 330k & 50.5 & 60.1 \\
+Mouse pancreas & 302k & 58.1 & 52.2 \\
+HypoMap & 385k & 26.3 & 51.6 \\
+Tabula Sapiens & 483k & 94.5 & 110.2 \\
+\midrule
+Total & & 269.6 & 304.3 \\
+\bottomrule
+\end{tabular}
+\end{table}
