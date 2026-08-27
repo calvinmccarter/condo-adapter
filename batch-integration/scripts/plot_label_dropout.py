@@ -90,7 +90,7 @@ def main():
     present = [ds for ds in DS_ORDER if ds not in args.exclude
                and any((t, ds, "full", 0.0) in mean for t in ("affine", "location_scale"))]
 
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4.4), sharey=True)
+    fig, axes = plt.subplots(1, 2, figsize=(6.5, 2.9), sharey=True)
     fig.patch.set_facecolor("white")
     for ax, t, title in zip(axes, ["affine", "location_scale"],
                             ["Affine", "Location-scale"]):
@@ -108,31 +108,33 @@ def main():
                 if len(xs) < 2:
                     continue
                 ax.plot(xs, ys, color=HANDLING_COLOR[h], marker=DS_MARKER[ds],
-                        markersize=6, linewidth=2, markeredgecolor="white",
-                        markeredgewidth=0.6, alpha=0.9, zorder=3)
-        ax.axhline(1.0, color=GRID, linewidth=1, zorder=1)
-        ax.set_title(title, fontsize=12, color=INK, pad=8)
-        ax.set_xlabel("Fraction of cell-type labels hidden", fontsize=10, color=MUTED)
+                        markersize=4.5, linewidth=1.4, markeredgecolor="white",
+                        markeredgewidth=0.5, alpha=0.9, zorder=3)
+        ax.axhline(1.0, color=GRID, linewidth=0.8, zorder=1)
+        ax.set_title(title, fontsize=10, color=INK, pad=5)
+        ax.set_xlabel("Fraction of cell-type labels hidden", fontsize=8.5, color=MUTED)
         ax.set_xticks(FRACS)
-        ax.grid(axis="y", color=GRID, linewidth=0.8, zorder=0)
+        ax.grid(axis="y", color=GRID, linewidth=0.6, zorder=0)
         ax.set_axisbelow(True)
         for spine in ("top", "right"):
             ax.spines[spine].set_visible(False)
         for spine in ("left", "bottom"):
             ax.spines[spine].set_color("#c3c2b7")
-        ax.tick_params(colors=MUTED, labelsize=9)
-    axes[0].set_ylabel("Composite (relative to 0% dropout)", fontsize=10, color=MUTED)
+        ax.tick_params(colors=MUTED, labelsize=7.5)
+    axes[0].set_ylabel("Composite (relative to 0% dropout)", fontsize=8.5, color=MUTED)
 
-    color_leg = [Line2D([0], [0], color=HANDLING_COLOR[h], lw=3, label=HANDLING_LABEL[h])
+    color_leg = [Line2D([0], [0], color=HANDLING_COLOR[h], lw=2.4, label=HANDLING_LABEL[h])
                  for h in ["excluded", "bucket"]]
-    ds_leg = [Line2D([0], [0], color=MUTED, marker=DS_MARKER[ds], lw=0, markersize=7,
-                     markeredgecolor="white", markeredgewidth=0.6, label=DS_LABEL[ds])
+    ds_leg = [Line2D([0], [0], color=MUTED, marker=DS_MARKER[ds], lw=0, markersize=5.5,
+                     markeredgecolor="white", markeredgewidth=0.5, label=DS_LABEL[ds])
               for ds in present]
     leg1 = axes[1].legend(handles=color_leg, title="Unlabeled handling",
-                          loc="lower left", fontsize=9, title_fontsize=9, frameon=False)
+                          loc="lower left", fontsize=7.5, title_fontsize=7.5,
+                          frameon=False, handlelength=1.5, labelspacing=0.3)
     axes[1].add_artist(leg1)
     axes[0].legend(handles=ds_leg, title="Dataset", loc="lower left",
-                   fontsize=8.5, title_fontsize=9, frameon=False, ncol=1)
+                   fontsize=7, title_fontsize=7.5, frameon=False, ncol=1,
+                   handlelength=1.0, labelspacing=0.25)
 
     fig.tight_layout()
     fig.savefig(args.out, dpi=150, facecolor="white")
