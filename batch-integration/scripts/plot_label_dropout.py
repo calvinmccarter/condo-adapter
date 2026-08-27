@@ -15,7 +15,23 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib import font_manager as fm
 from matplotlib.lines import Line2D
+
+# Prefer Arial/Helvetica; fall back to their metric-compatible clones
+# (Liberation Sans ~ Arial, Nimbus Sans ~ Helvetica) so the figure renders in a
+# Helvetica-style face on machines without the proprietary originals.
+for _p in fm.findSystemFonts():
+    low = _p.lower()
+    if "liberationsans" in low or "nimbussans-" in low:
+        try:
+            fm.fontManager.addfont(_p)
+        except Exception:
+            pass
+plt.rcParams["font.family"] = "sans-serif"
+plt.rcParams["font.sans-serif"] = [
+    "Arial", "Helvetica", "Liberation Sans", "Nimbus Sans", "DejaVu Sans",
+]
 
 BIO = ["nmi", "ari", "isolated_label_asw", "clisi"]
 BATCH = ["asw_batch", "graph_connectivity", "ilisi"]
@@ -64,7 +80,7 @@ def load_means(results_dir):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--results-dir",
-                    default="work/label_dropout/results")
+                    default="paper-results/label_dropout/results")
     ap.add_argument("--out", default="work/label_dropout/dropout_curves.png")
     ap.add_argument("--exclude", nargs="*", default=["tabula_sapiens"],
                     help="datasets to omit (e.g. still-running ones)")
@@ -75,8 +91,10 @@ def main():
                and any((t, ds, "full", 0.0) in mean for t in ("affine", "location_scale"))]
 
     fig, axes = plt.subplots(1, 2, figsize=(10, 4.4), sharey=True)
+    fig.patch.set_facecolor("white")
     for ax, t, title in zip(axes, ["affine", "location_scale"],
                             ["Affine", "Location-scale"]):
+        ax.set_facecolor("white")
         for ds in present:
             base = mean.get((t, ds, "full", 0.0))
             if base is None:
@@ -116,10 +134,8 @@ def main():
     axes[0].legend(handles=ds_leg, title="Dataset", loc="lower left",
                    fontsize=8.5, title_fontsize=9, frameon=False, ncol=1)
 
-    fig.suptitle("ConDo integration quality vs. cell-type label availability",
-                 fontsize=13, color=INK, y=0.99)
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
-    fig.savefig(args.out, dpi=150, facecolor="#fcfcfb")
+    fig.tight_layout()
+    fig.savefig(args.out, dpi=150, facecolor="white")
     print(f"wrote {args.out}")
 
 

@@ -1,0 +1,29 @@
+{
+  "divergence": "mmd",
+  "rep": "features",
+  "n_epochs": "5",
+  "learning_rate": "1e-3",
+  "mmd_size": "40",
+  "batch_size": "8",
+  "weight_decay": "1e-4",
+  "patience": "3",
+  "dplr_rank": "16",
+  "random_state": "42",
+  "ranking_strategy": "batch_silhouette_low",
+  "fractions": [
+    0.25,
+    0.5,
+    0.75,
+    1.0
+  ],
+  "handlings": [
+    "bucket",
+    "excluded"
+  ],
+  "transforms": [
+    "affine",
+    "location-scale"
+  ],
+  "seeds_small": 3,
+  "seeds_atlas": 1
+}
