@@ -62,6 +62,13 @@ def main() -> None:
     parser.add_argument("--patience", type=int, default=3,
                         help="early-stopping patience for the MMD training")
     parser.add_argument("--random-state", type=int, default=42)
+    parser.add_argument("--label-dropout", dest="label_dropout", type=float, default=0.0,
+                        help="fraction of cell-type labels to hide from the fit (0..1)")
+    parser.add_argument("--dropout-handling", dest="dropout_handling",
+                        choices=["bucket", "excluded"], default="bucket",
+                        help="how hidden labels are treated (see condo_runner)")
+    parser.add_argument("--dropout-seed", dest="dropout_seed", type=int, default=0,
+                        help="RNG seed selecting which labels are hidden")
     parser.add_argument(
         "--device",
         default="cpu",
@@ -129,6 +136,9 @@ def main() -> None:
         "patience": args.patience,
         "dplr_rank": args.dplr_rank,
         "random_state": args.random_state,
+        "label_dropout": args.label_dropout,
+        "dropout_handling": args.dropout_handling,
+        "dropout_seed": args.dropout_seed,
         "device": args.device,
     }
     meta = {"name": name, "resources_dir": str(utils_dir)}

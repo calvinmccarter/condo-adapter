@@ -110,13 +110,23 @@ def _safe(metric_name: str, fn: Callable[[], float]) -> dict[str, Any]:
         }
 
 
+COMPOSITE7 = {
+    "nmi", "ari", "isolated_label_asw", "clisi",
+    "asw_batch", "graph_connectivity", "ilisi",
+}
+
+
 def evaluate(
     integrated_path: str,
     dataset_path: str,
     solution_path: str,
     skip_kbet: bool = False,
     timing: dict | None = None,
+    metrics: set[str] | None = None,
 ) -> list[dict]:
+    def want(name: str) -> bool:
+        return metrics is None or name in metrics
+
     _t_eval = time.time()
     print(">> Read integrated", flush=True)
     _t_read = time.time()
@@ -141,33 +151,28 @@ def evaluate(
 
     results: list[dict] = []
 
+    def add(name, fn):
+        if want(name):
+            results.append(_safe(name, fn))
+
     # ------------------------------------------------------------------ bio
     from scib.metrics import silhouette as _scib_silhouette
     from scib.metrics import silhouette_batch as _scib_silhouette_batch
     from scib.metrics import graph_connectivity as _scib_graph_conn
 
-    results.append(
-        _safe(
-            "asw_label",
-            lambda: _scib_silhouette(integrated, label_key="cell_type", embed="X_emb"),
-        )
+    add(
+        "asw_label",
+        lambda: _scib_silhouette(integrated, label_key="cell_type", embed="X_emb"),
     )
-    results.append(
-        _safe(
-            "asw_batch",
-            lambda: _scib_silhouette_batch(
-                integrated,
-                batch_key="batch",
-                label_key="cell_type",
-                embed="X_emb",
-            ),
-        )
+    add(
+        "asw_batch",
+        lambda: _scib_silhouette_batch(
+            integrated, batch_key="batch", label_key="cell_type", embed="X_emb",
+        ),
     )
-    results.append(
-        _safe(
-            "graph_connectivity",
-            lambda: _scib_graph_conn(integrated, label_key="cell_type"),
-        )
+    add(
+        "graph_connectivity",
+        lambda: _scib_graph_conn(integrated, label_key="cell_type"),
     )
 
     # ------------------------------------------------------------------ pcr
@@ -183,17 +188,11 @@ def evaluate(
             obs=solution.obs.copy(),
             var=solution.var.loc[batch_hvg].copy(),
         )
-        results.append(
-            _safe(
-                "pcr",
-                lambda: pcr_comparison(
-                    adata_pre,
-                    integrated,
-                    embed="X_emb",
-                    covariate="batch",
-                    n_comps=50,
-                ),
-            )
+        add(
+            "pcr",
+            lambda: pcr_comparison(
+                adata_pre, integrated, embed="X_emb", covariate="batch", n_comps=50,
+            ),
         )
     except Exception as exc:
         results.append(
@@ -207,7 +206,8 @@ def evaluate(
     # Precompute the leiden clustering once (igraph) and share it between
     # nmi/ari and isolated_label_f1, matching openproblems' precompute step.
     _t_leiden = time.time()
-    _precompute_leiden(integrated)
+    if want("ari") or want("nmi") or want("isolated_label_f1"):
+        _precompute_leiden(integrated)
     leiden_seconds = time.time() - _t_leiden
 
     # ----------------------------------------------- clustering_overlap (ari + nmi)
@@ -215,27 +215,17 @@ def evaluate(
         from scib.metrics.clustering import cluster_optimal_resolution
         from scib.metrics import nmi, ari
 
-        adata_clust = integrated.copy()
-        cluster_optimal_resolution(
-            adata=adata_clust,
-            label_key="cell_type",
-            cluster_key="leiden",
-            cluster_function=_leiden_igraph,
-            resolutions=_RESOLUTIONS,
-        )
-
-        results.append(
-            _safe(
-                "ari",
-                lambda: ari(adata_clust, cluster_key="leiden", label_key="cell_type"),
+        if want("ari") or want("nmi"):
+            adata_clust = integrated.copy()
+            cluster_optimal_resolution(
+                adata=adata_clust,
+                label_key="cell_type",
+                cluster_key="leiden",
+                cluster_function=_leiden_igraph,
+                resolutions=_RESOLUTIONS,
             )
-        )
-        results.append(
-            _safe(
-                "nmi",
-                lambda: nmi(adata_clust, cluster_key="leiden", label_key="cell_type"),
-            )
-        )
+            add("ari", lambda: ari(adata_clust, cluster_key="leiden", label_key="cell_type"))
+            add("nmi", lambda: nmi(adata_clust, cluster_key="leiden", label_key="cell_type"))
     except Exception as exc:
         results.append(
             {
@@ -264,25 +254,23 @@ def evaluate(
             n_batches + 1 if default_threshold == n_batches else None
         )
 
-        results.append(
-            _safe(
-                "isolated_label_asw",
-                lambda: isolated_labels_asw(
-                    integrated,
-                    label_key="cell_type",
-                    batch_key="batch",
-                    embed="X_emb",
-                    iso_threshold=iso_thr_override,
-                    verbose=False,
-                ),
-            )
+        add(
+            "isolated_label_asw",
+            lambda: isolated_labels_asw(
+                integrated,
+                label_key="cell_type",
+                batch_key="batch",
+                embed="X_emb",
+                iso_threshold=iso_thr_override,
+                verbose=False,
+            ),
         )
         # isolated_labels_f1 re-optimises resolution against its own F1
         # metric, but reuses the precomputed leiden_{res} columns carried in
         # on the copy of `integrated` (no new leiden runs).
-        adata_clust2 = integrated.copy()
-        results.append(
-            _safe(
+        if want("isolated_label_f1"):
+            adata_clust2 = integrated.copy()
+            add(
                 "isolated_label_f1",
                 lambda: isolated_labels_f1(
                     adata_clust2,
@@ -295,7 +283,6 @@ def evaluate(
                     verbose=False,
                 ),
             )
-        )
     except Exception as exc:
         results.append(
             {
@@ -357,17 +344,15 @@ def evaluate(
                 ~adata_integrated_hvg.obs["batch"].isin(skip)
             ].copy()
 
-        results.append(
-            _safe(
-                "hvg_overlap",
-                lambda: hvg_overlap(
-                    adata_solution[
-                        :, adata_solution.var_names.isin(adata_integrated_hvg.var_names)
-                    ],
-                    adata_integrated_hvg,
-                    batch_key="batch",
-                ),
-            )
+        add(
+            "hvg_overlap",
+            lambda: hvg_overlap(
+                adata_solution[
+                    :, adata_solution.var_names.isin(adata_integrated_hvg.var_names)
+                ],
+                adata_integrated_hvg,
+                batch_key="batch",
+            ),
         )
     except Exception as exc:
         results.append(
@@ -385,7 +370,7 @@ def evaluate(
     # datasets, where the published baselines also lack it) and is not part
     # of the all/feature composites.
     try:
-        if skip_kbet:
+        if skip_kbet or not want("kbet"):
             results.append({"metric": "kbet", "skipped": True})
         elif not _KBET_VENV_PY.exists():
             results.append(
@@ -471,8 +456,8 @@ def evaluate(
             med = np.nanmedian(scores)
             return (n_labels - med) / (n_labels - 1)
 
-        results.append(_safe("ilisi", _ilisi))
-        results.append(_safe("clisi", _clisi))
+        add("ilisi", _ilisi)
+        add("clisi", _clisi)
     except Exception as exc:
         results.append(
             {
@@ -505,7 +490,7 @@ def evaluate(
             organism=solution.uns["dataset_organism"],
         )
 
-    results.append(_safe("cell_cycle_conservation", _ccc))
+    add("cell_cycle_conservation", _ccc)
 
     if timing is not None:
         metrics_seconds = sum(
@@ -534,12 +519,24 @@ def main() -> None:
         help="skip the kbet metric (slow R subprocess; times out on large "
              "datasets and not used in the all/feature composites).",
     )
+    parser.add_argument(
+        "--metrics", default=None,
+        help="comma-separated metric names to compute, or 'composite' for the "
+             "7-metric leaderboard set. Default: all metrics.",
+    )
     args = parser.parse_args()
+
+    metrics = None
+    if args.metrics:
+        metrics = (
+            set(COMPOSITE7) if args.metrics == "composite"
+            else {m.strip() for m in args.metrics.split(",") if m.strip()}
+        )
 
     timing: dict = {}
     results = evaluate(
         args.integrated, args.dataset, args.solution,
-        skip_kbet=args.skip_kbet, timing=timing,
+        skip_kbet=args.skip_kbet, timing=timing, metrics=metrics,
     )
 
     Path(args.output).write_text(json.dumps(results, indent=2))
