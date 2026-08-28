@@ -82,7 +82,7 @@ def main():
     ap.add_argument("--results-dir",
                     default="paper-results/label_dropout/results")
     ap.add_argument("--out", default="work/label_dropout/dropout_curves.png")
-    ap.add_argument("--exclude", nargs="*", default=["tabula_sapiens"],
+    ap.add_argument("--exclude", nargs="*", default=[],
                     help="datasets to omit (e.g. still-running ones)")
     args = ap.parse_args()
 
