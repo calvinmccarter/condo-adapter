@@ -48,7 +48,7 @@ DS_LABEL = {"dkd": "DKD", "gtex_v9": "GTEx", "immune_cell_atlas": "Immune",
             "mouse_pancreas_atlas": "Mouse panc.", "hypomap": "HypoMap",
             "tabula_sapiens": "Tabula Sapiens"}
 
-FRACS = [0.0, 0.25, 0.5, 0.75, 1.0]
+FRACS = [0.0, 0.25, 0.5, 0.75, 0.9, 1.0]
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e1e0d9"
 
 
@@ -101,7 +101,7 @@ def main():
                 continue
             for h in ["excluded", "bucket"]:
                 xs, ys = [0.0], [1.0]  # anchor at baseline
-                for fr in [0.25, 0.5, 0.75, 1.0]:
+                for fr in FRACS[1:]:
                     v = mean.get((t, ds, h, fr))
                     if v is not None:
                         xs.append(fr); ys.append(v / base)
